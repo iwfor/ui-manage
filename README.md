@@ -49,7 +49,7 @@ Run `bin/ui-manage help` for the full command list, or
 | `gateway` | Internet (WAN) status |
 | `clients` | Every wired/wireless client on the network |
 | `ports` | What's connected to each switch/gateway port |
-| `port-power` | PoE port power status |
+| `power` | PoE devices/ports and their power state; `--on`/`--off "DEVICE:PORT"` toggles a port |
 | `firewall` | Firewall rules |
 | `port-forwards` | Port forwarding rules |
 | `dhcp` | DHCP network configuration, leases, and reservations |

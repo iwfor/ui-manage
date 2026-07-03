@@ -208,13 +208,35 @@ module UiManage
     # Port power (PoE)
     # -------------------------------------------------------------------------
 
-    desc 'port-power', 'Show PoE port power status'
-    map 'port-power' => :port_power
+    desc 'power', 'Show PoE devices/ports and their power state'
+    long_desc <<~DESC
+      Lists every PoE-capable port across your switches/gateway: current mode,
+      status, and power draw.
+
+      Use --on or --off to turn PoE on or off for a specific port instead of
+      listing status. Give "DEVICE:PORT", where DEVICE matches a device's full
+      name, or a unique substring of one — if the pattern matches more than
+      one device, nothing is changed and the ambiguous device names are
+      listed so you can be more specific. PORT is the port number shown in
+      the Port column.
+
+        ui-manage power --on "Living Room:3"
+
+        ui-manage power --off "Pro Max:12"
+    DESC
     option :device, aliases: '-d', type: :string,  desc: 'Device name'
     option :json,   aliases: '-j', type: :boolean, desc: 'Output raw JSON', default: false
     option :active, aliases: '-a', type: :boolean, desc: 'Show only active PoE ports', default: false
-    def port_power
-      show_port_power
+    option :on,     type: :string, desc: 'Turn PoE on for "DEVICE:PORT"'
+    option :off,    type: :string, desc: 'Turn PoE off for "DEVICE:PORT"'
+    def power
+      abort 'Use either --on or --off, not both.' if options[:on] && options[:off]
+
+      if options[:on] || options[:off]
+        toggle_port_power(options[:on] || options[:off], enabled: !!options[:on])
+      else
+        show_power
+      end
     end
 
     # -------------------------------------------------------------------------
@@ -344,7 +366,7 @@ module UiManage
     desc 'report', 'Generate a full report combining all information commands'
     long_desc <<~DESC
       Runs every information command (identity, cpu, memory, storage, gateway,
-      clients, firewall, port-forwards, dhcp, port-power, ports) against a
+      clients, firewall, port-forwards, dhcp, power, ports) against a
       single device and prints them together as one report.
 
       --anon (or --anonymous) replaces MAC addresses and IP addresses throughout
@@ -391,8 +413,8 @@ module UiManage
       report_header('DHCP Leases & Reservations')
       show_dhcp_leases(client: client, anon: anon)
 
-      report_header('Port Power (PoE)')
-      show_port_power(client: client, anon: anon)
+      report_header('Power (PoE)')
+      show_power(client: client, anon: anon)
 
       report_header('Ports')
       show_ports(client: client, anon: anon)
@@ -594,7 +616,7 @@ module UiManage
       say 'No leases or reservations found.' if reservations.empty? && leases.empty?
     end
 
-    def show_port_power(client: nil, anon: Anonymizer.new(false))
+    def show_power(client: nil, anon: Anonymizer.new(false))
       devs = with_client(client) { |c| c.devices }
 
       return Formatter.json(anon.deep_scrub(devs)) if options[:json]
@@ -630,6 +652,50 @@ module UiManage
         rows,
         title: 'PoE Port Power'
       )
+    end
+
+    # Turns PoE on/off for a single port, identified as "DEVICE:PORT" where
+    # DEVICE is a device's full name or a unique substring of one.
+    def toggle_port_power(spec, enabled:)
+      pattern, _, port_str = spec.rpartition(':')
+      abort 'Expected "DEVICE:PORT" (e.g. "Living Room:3").' if pattern.empty? || port_str.empty?
+
+      port_idx = Integer(port_str, exception: false)
+      abort "Invalid port number: #{port_str.inspect}" unless port_idx
+
+      client = resolve_client
+
+      with_client(client) do |c|
+        dev  = find_device_by_pattern(c.devices, pattern)
+        name = dev['name'] || dev['model']
+
+        port = (dev['port_table'] || []).find { |p| p['port_idx'] == port_idx }
+        abort "Port #{port_idx} not found on #{name}." unless port
+        abort "Port #{port_idx} on #{name} does not support PoE." unless port['poe_caps'].to_i > 0
+
+        c.set_port_poe(device: dev, port_idx: port_idx, enabled: enabled)
+
+        label = port['name'] ? "port #{port_idx} (#{port['name']})" : "port #{port_idx}"
+        say "Turned PoE #{enabled ? 'on' : 'off'} for #{name} #{label}."
+      end
+    end
+
+    # Matches a device by its full name, or by a substring of its name if
+    # exactly one device contains it.
+    def find_device_by_pattern(devs, pattern)
+      exact = devs.find { |d| d['name'] == pattern }
+      return exact if exact
+
+      matches = devs.select { |d| d['name']&.downcase&.include?(pattern.downcase) }
+      case matches.size
+      when 0
+        abort "No device matches #{pattern.inspect}."
+      when 1
+        matches.first
+      else
+        names = matches.map { |d| d['name'] || d['model'] }.join(', ')
+        abort "#{pattern.inspect} matches multiple devices (#{names}) — use a more specific pattern."
+      end
     end
 
     def show_ports(client: nil, anon: Anonymizer.new(false))

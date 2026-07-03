@@ -40,6 +40,21 @@ module UiManage
         devs.first
     end
 
+    # Turns PoE on ('auto') or off for a single port on the given device,
+    # preserving any other ports' existing overrides.
+    def set_port_poe(device:, port_idx:, enabled:)
+      overrides = (device['port_overrides'] || []).map(&:dup)
+      mode      = enabled ? 'auto' : 'off'
+
+      if (entry = overrides.find { |o| o['port_idx'] == port_idx })
+        entry['poe_mode'] = mode
+      else
+        overrides << { 'port_idx' => port_idx, 'poe_mode' => mode }
+      end
+
+      network_put("/rest/device/#{device['_id']}", body: JSON.generate('port_overrides' => overrides))
+    end
+
     def login
       raw              = fetch(:post, '/api/auth/login',
                            body:            JSON.generate(username: @username, password: @password),
@@ -71,6 +86,11 @@ module UiManage
     def network_get(path)
       ensure_authenticated
       parse_response fetch(:get, "#{NETWORK_PREFIX}/#{@site}#{path}")
+    end
+
+    def network_put(path, body:)
+      ensure_authenticated
+      parse_response fetch(:put, "#{NETWORK_PREFIX}/#{@site}#{path}", body: body)
     end
 
     def ensure_authenticated
