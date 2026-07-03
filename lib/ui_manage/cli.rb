@@ -165,7 +165,7 @@ module UiManage
       say "Device '#{name}' removed."
     end
 
-    desc 'completions SHELL', 'Print a shell completion script (bash or zsh)'
+    desc 'completions [SHELL]', 'Print a shell completion script (bash or zsh)'
     long_desc <<~DESC
       Prints a completion script for command and flag names to stdout. Load
       it by adding one of these to your shell startup file:
@@ -173,8 +173,14 @@ module UiManage
         echo 'eval "$(ui-manage completions bash)"' >> ~/.bashrc
 
         echo 'eval "$(ui-manage completions zsh)"' >> ~/.zshrc
+
+      SHELL defaults to the shell named by the $SHELL environment variable
+      when omitted.
     DESC
-    def completions(shell)
+    def completions(shell = nil)
+      shell ||= File.basename(ENV['SHELL'].to_s)
+      abort 'Could not determine shell from $SHELL — pass bash or zsh explicitly.' if shell.empty?
+
       commands = self.class.all_commands.reject { |_, c| c.hidden? }.to_h do |name, command|
         flags = (command.options.values + self.class.class_options.values)
                 .flat_map { |o| [o.switch_name, *o.aliases] }
