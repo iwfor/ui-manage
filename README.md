@@ -43,6 +43,7 @@ Run `bin/ui-manage help` for the full command list, or
 | `use-device NAME` | Set the default device |
 | `remove-device NAME` | Remove a configured device |
 | `devices` | List configured devices |
+| `completions SHELL` | Print a bash or zsh completion script |
 | `report` | Run every information command against a device and print them together |
 | `identity` | Device name, serial, MAC, firmware, and other identifiers |
 | `cpu` / `memory` / `storage` | System health |
@@ -61,6 +62,13 @@ identifiers with realistic-looking placeholders — useful for sharing output
 
 Pass `-v/--verbose` on any command to print the curl commands being executed
 (secrets are always redacted).
+
+## Shell completions
+
+```
+echo 'eval "$(bin/ui-manage completions bash)"' >> ~/.bashrc
+echo 'eval "$(bin/ui-manage completions zsh)"'  >> ~/.zshrc
+```
 
 ## Configuration
 

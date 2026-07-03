@@ -165,6 +165,27 @@ module UiManage
       say "Device '#{name}' removed."
     end
 
+    desc 'completions SHELL', 'Print a shell completion script (bash or zsh)'
+    long_desc <<~DESC
+      Prints a completion script for command and flag names to stdout. Load
+      it by adding one of these to your shell startup file:
+
+        echo 'eval "$(ui-manage completions bash)"' >> ~/.bashrc
+
+        echo 'eval "$(ui-manage completions zsh)"' >> ~/.zshrc
+    DESC
+    def completions(shell)
+      commands = self.class.all_commands.reject { |_, c| c.hidden? }.to_h do |name, command|
+        flags = (command.options.values + self.class.class_options.values)
+                .flat_map { |o| [o.switch_name, *o.aliases] }
+        [name.tr('_', '-'), flags]
+      end
+
+      puts Completions.generate(shell, prog: File.basename($PROGRAM_NAME), commands: commands)
+    rescue ArgumentError => e
+      abort e.message
+    end
+
     # -------------------------------------------------------------------------
     # Firewall
     # -------------------------------------------------------------------------
