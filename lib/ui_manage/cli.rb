@@ -365,11 +365,14 @@ module UiManage
     # Clients
     # -------------------------------------------------------------------------
 
-    desc 'clients', 'Show every client connected to the network'
+    desc 'clients [PATTERN]', 'Show every client connected to the network'
     long_desc <<~DESC
       Lists every wired and wireless client the controller currently knows
       about: name, IP, MAC, connection type, what switch port or access point
       (and SSID) it's connected through, wireless signal, and last-seen time.
+
+      PATTERN, if given, filters to clients whose name, hostname, or IP
+      contains it (case-insensitive substring match).
 
       Sorted by name by default; use --ip to sort by IP address instead.
       Clients with no IP address are listed last.
@@ -382,8 +385,8 @@ module UiManage
     option :ip,     aliases: '-i', type: :boolean, default: false, desc: 'Sort by IP address instead of name'
     option :anon,   aliases: ['--anonymous'], type: :boolean, default: false,
                     desc: 'Replace MAC addresses and IP addresses with friendly placeholders'
-    def clients
-      show_clients(anon: Anonymizer.new(options[:anon]))
+    def clients(pattern = nil)
+      show_clients(anon: Anonymizer.new(options[:anon]), pattern: pattern)
     end
 
     # -------------------------------------------------------------------------
@@ -970,13 +973,18 @@ module UiManage
       end
     end
 
-    def show_clients(client: nil, anon: Anonymizer.new(false))
+    def show_clients(client: nil, anon: Anonymizer.new(false), pattern: nil)
       devs, sta = with_client(client) { |c| [c.devices, c.clients] }
+
+      if pattern
+        needle = pattern.downcase
+        sta = sta.select { |c| [c['name'], c['hostname'], c['ip']].any? { |v| v.to_s.downcase.include?(needle) } }
+      end
 
       return Formatter.json(anon.deep_scrub(sta)) if options[:json]
 
       if sta.empty?
-        say 'No clients found.'
+        say pattern ? "No clients match #{pattern.inspect}." : 'No clients found.'
         return
       end
 
