@@ -374,18 +374,25 @@ module UiManage
       PATTERN, if given, filters to clients whose name, hostname, or IP
       contains it (case-insensitive substring match).
 
+      --wired and --wireless further filter to only clients of that
+      connection type; they can't be used together.
+
       Sorted by name by default; use --ip to sort by IP address instead.
       Clients with no IP address are listed last.
 
       --anon (or --anonymous) replaces IP and MAC addresses with friendly
       placeholders.
     DESC
-    option :device, aliases: '-d', type: :string,  desc: 'Device name'
-    option :json,   aliases: '-j', type: :boolean, desc: 'Output raw JSON', default: false
-    option :ip,     aliases: '-i', type: :boolean, default: false, desc: 'Sort by IP address instead of name'
-    option :anon,   aliases: ['--anonymous'], type: :boolean, default: false,
-                    desc: 'Replace MAC addresses and IP addresses with friendly placeholders'
+    option :device,   aliases: '-d', type: :string,  desc: 'Device name'
+    option :json,     aliases: '-j', type: :boolean, desc: 'Output raw JSON', default: false
+    option :ip,       aliases: '-i', type: :boolean, default: false, desc: 'Sort by IP address instead of name'
+    option :wired,    type: :boolean, default: false, desc: 'Only show wired clients'
+    option :wireless, type: :boolean, default: false, desc: 'Only show wireless clients'
+    option :anon,     aliases: ['--anonymous'], type: :boolean, default: false,
+                       desc: 'Replace MAC addresses and IP addresses with friendly placeholders'
     def clients(pattern = nil)
+      raise Thor::Error, "ERROR: '--wired' and '--wireless' can't be used together." if options[:wired] && options[:wireless]
+
       show_clients(anon: Anonymizer.new(options[:anon]), pattern: pattern)
     end
 
@@ -980,6 +987,9 @@ module UiManage
         needle = pattern.downcase
         sta = sta.select { |c| [c['name'], c['hostname'], c['ip']].any? { |v| v.to_s.downcase.include?(needle) } }
       end
+
+      sta = sta.select { |c| c['is_wired'] }     if options[:wired]
+      sta = sta.reject { |c| c['is_wired'] }     if options[:wireless]
 
       return Formatter.json(anon.deep_scrub(sta)) if options[:json]
 
