@@ -1,14 +1,11 @@
 require 'toml-rb'
-require 'fileutils'
 
 module UiManage
   class Config
-    CONFIG_DIR  = File.join(Dir.home, '.config', 'ui-manage')
     CONFIG_FILE = File.join(CONFIG_DIR, 'config.toml')
 
     def initialize
-      FileUtils.mkdir_p(CONFIG_DIR)
-      Encryption.ensure_key
+      Encryption.ensure_key # also creates CONFIG_DIR
       @data = load_file
     end
 
@@ -28,11 +25,15 @@ module UiManage
         raise("Device '#{name}' not found. Run `ui-manage devices` to list configured devices.")
     end
 
-    def add_device(name:, host:, site: 'default', username: nil, encrypted_password: nil, encrypted_api_key: nil)
+    def add_device(name:, host:, site: 'default', username: nil, encrypted_password: nil, encrypted_api_key: nil, verify_ssl: false)
+      { 'name' => name, 'host' => host, 'site' => site, 'username' => username }.each do |field, value|
+        validate_field!(field, value)
+      end
+
       @data['devices'] ||= []
       @data['devices'].reject! { |d| d['name'] == name }
 
-      entry = { 'name' => name, 'host' => host, 'site' => site }
+      entry = { 'name' => name, 'host' => host, 'site' => site, 'verify_ssl' => verify_ssl }
       if encrypted_api_key
         entry['encrypted_api_key'] = encrypted_api_key
       else
@@ -66,6 +67,17 @@ module UiManage
 
     private
 
+    # toml-rb (parser and dumper alike, as of 3.0.1) mishandles control
+    # characters in strings, producing a config file that can't be re-read.
+    # Reject them at the boundary rather than corrupting the config.
+    def validate_field!(field, value)
+      return if value.nil?
+
+      if value.to_s.match?(/[\x00-\x1f\x7f]/)
+        raise ArgumentError, "Device #{field} must not contain control characters"
+      end
+    end
+
     def load_file
       return {} unless File.exist?(CONFIG_FILE)
 
@@ -74,40 +86,23 @@ module UiManage
       abort "Error loading config (#{CONFIG_FILE}): #{e.message}"
     end
 
+    # The file is created 0600 via open's permission argument (chmodding after
+    # writing would leave a readable window under the default umask); the
+    # explicit chmod fixes up files created before that was the case.
     def save
-      File.write(CONFIG_FILE, serialize)
+      File.open(CONFIG_FILE, File::WRONLY | File::CREAT | File::TRUNC, 0o600) do |f|
+        f.write(serialize)
+      end
       File.chmod(0o600, CONFIG_FILE)
     end
 
     def serialize
-      lines = []
-
-      if (settings = @data['settings'])
+      data = @data.dup
+      if (settings = data['settings'])
         printable = settings.reject { |_, v| v.nil? }
-        unless printable.empty?
-          lines << '[settings]'
-          printable.each { |k, v| lines << "#{k} = #{toml_val(v)}" }
-          lines << ''
-        end
+        printable.empty? ? data.delete('settings') : data['settings'] = printable
       end
-
-      (@data['devices'] || []).each do |d|
-        lines << '[[devices]]'
-        d.each { |k, v| lines << "#{k} = #{toml_val(v)}" }
-        lines << ''
-      end
-
-      lines.join("\n")
-    end
-
-    def toml_val(v)
-      case v
-      when String  then v.inspect
-      when Integer then v.to_s
-      when Float   then v.to_s
-      when true, false then v.to_s
-      else v.inspect
-      end
+      TomlRB.dump(data)
     end
   end
 end

@@ -50,6 +50,14 @@ module UiManage
     class_option :verbose, aliases: '-v', type: :boolean, default: false,
                             desc: 'Print the curl commands being executed (API keys, tokens, and request bodies are redacted)'
 
+    # Declares the option trio shared by the information commands: --device,
+    # --json, and — when a description is given — --anon/--anonymous.
+    def self.output_options(json: true, anon: nil)
+      option :device, aliases: '-d', type: :string,  desc: 'Device name (uses default if omitted)'
+      option :json,   aliases: '-j', type: :boolean, desc: 'Output raw JSON', default: false if json
+      option :anon,   aliases: ['--anonymous'], type: :boolean, default: false, desc: anon if anon
+    end
+
     # -------------------------------------------------------------------------
     # Device management
     # -------------------------------------------------------------------------
@@ -75,47 +83,48 @@ module UiManage
 
         ui-manage login --api-key $(pass show udm-pro/api-key) 192.168.1.1
 
-      To avoid the key appearing in shell history, assign it first:
+      Pass "-" as the key to read it from a hidden prompt (or from stdin when
+      piped), keeping it out of shell history and the process list:
 
-        read -rs API_KEY && ui-manage login --api-key "$API_KEY" 192.168.1.1
+        ui-manage login --api-key - 192.168.1.1
+
+        pass show udm-pro/api-key | ui-manage login --api-key - 192.168.1.1
+
+      --verify-ssl turns on TLS certificate verification for this device (off by
+      default, since UniFi controllers ship with self-signed certificates). Use it
+      when your controller has a certificate your system trusts — without it,
+      connections are vulnerable to man-in-the-middle interception. The setting is
+      saved with the device and applies to every later command.
     DESC
     option :name,    aliases: '-n', type: :string,  desc: 'Alias for this device (default: hostname/IP)'
     option :site,    aliases: '-s', type: :string,  desc: 'UniFi site name — the internal identifier shown in Network > Settings > Site (most installs use "default")', default: 'default'
     option :username, aliases: '-u', type: :string,  desc: 'Username for local account auth (will prompt if omitted and --api-key not set)'
-    option :api_key, aliases: '-k', type: :string,  desc: 'API key for authentication (Network App 8.x+). Pass the key directly or use $(pass show ...) / $(op read ...)'
+    option :api_key, aliases: '-k', type: :string,  desc: 'API key for authentication (Network App 8.x+). Pass the key, or "-" to read it from a hidden prompt/stdin'
+    option :verify_ssl, type: :boolean, default: false, desc: 'Verify the controller TLS certificate (off by default — UniFi ships self-signed certs). Saved with the device'
     def login(host)
-      name   = options[:name] || host
-      config = Config.new
+      name        = options[:name] || host
+      config      = Config.new
+      client_args = { host: host, site: options[:site],
+                      verify_ssl: options[:verify_ssl], verbose: options[:verbose] }
 
-      if options[:api_key]
-        api_key = options[:api_key]
-        say "Connecting to #{host} with API key..."
+      creds =
+        if options[:api_key]
+          api_key = read_api_key(options[:api_key])
+          say "Connecting to #{host} with API key..."
+          Client.new(**client_args, api_key: api_key).sysinfo # verify key works
 
-        client = Client.new(host: host, site: options[:site], api_key: api_key, verbose: options[:verbose])
-        client.sysinfo # verify key works
+          { encrypted_api_key: Encryption.encrypt(api_key) }
+        else
+          username = options[:username] || ask('Username: ')
+          password = IO.console.getpass('Password: ')
+          say "Connecting to #{host} as #{username}..."
+          Client.new(**client_args, username: username, password: password).login
 
-        config.add_device(
-          name:              name,
-          host:              host,
-          site:              options[:site],
-          encrypted_api_key: Encryption.encrypt(api_key)
-        )
-      else
-        username = options[:username] || ask('Username: ')
-        password = IO.console.getpass('Password: ')
-        say "Connecting to #{host} as #{username}..."
+          { username: username, encrypted_password: Encryption.encrypt(password) }
+        end
 
-        client = Client.new(host: host, site: options[:site], username: username, password: password, verbose: options[:verbose])
-        client.login
-
-        config.add_device(
-          name:               name,
-          host:               host,
-          site:               options[:site],
-          username:           username,
-          encrypted_password: Encryption.encrypt(password)
-        )
-      end
+      config.add_device(name: name, host: host, site: options[:site],
+                        verify_ssl: options[:verify_ssl], **creds)
 
       say "Device '#{name}' (#{host}) saved successfully."
       say 'Set as default device.' if config.devices.length == 1
@@ -123,6 +132,8 @@ module UiManage
       abort "Authentication error: #{e.message}"
     rescue Client::ApiError => e
       abort "Connection error: #{e.message}"
+    rescue ArgumentError => e
+      abort "Error: #{e.message}"
     end
 
     desc 'devices', 'List configured devices'
@@ -139,11 +150,12 @@ module UiManage
       rows = devs.map do |d|
         marker  = d['name'] == default ? '*' : ' '
         auth    = d['encrypted_api_key'] ? 'api-key' : "password (#{d['username']})"
-        [marker, d['name'], d['host'], d['site'], auth]
+        tls     = d['verify_ssl'] ? 'verified' : 'no verify'
+        [marker, d['name'], d['host'], d['site'], auth, tls]
       end
 
       Formatter.table(
-        ['', 'Name', 'Host', 'Site', 'Auth'],
+        ['', 'Name', 'Host', 'Site', 'Auth', 'TLS'],
         rows,
         title: 'Configured Devices (* = default)'
       )
@@ -197,10 +209,9 @@ module UiManage
     # -------------------------------------------------------------------------
 
     desc 'firewall', 'Show firewall rules'
-    option :device,   aliases: '-d', type: :string,  desc: 'Device name (uses default if omitted)'
-    option :json,     aliases: '-j', type: :boolean, desc: 'Output raw JSON', default: false
-    option :ruleset,  aliases: '-r', type: :string,  desc: 'Filter by ruleset (WAN_IN, WAN_OUT, LAN_IN, etc.)'
-    option :enabled,  aliases: '-e', type: :boolean, desc: 'Show only enabled rules'
+    output_options
+    option :ruleset, aliases: '-r', type: :string,  desc: 'Filter by ruleset (WAN_IN, WAN_OUT, LAN_IN, etc.)'
+    option :enabled, aliases: '-e', type: :boolean, desc: 'Show only enabled rules'
     def firewall
       show_firewall
     end
@@ -211,8 +222,7 @@ module UiManage
 
     desc 'port-forwards', 'Show port forwarding rules'
     map 'port-forwards' => :port_forwards
-    option :device,  aliases: '-d', type: :string,  desc: 'Device name'
-    option :json,    aliases: '-j', type: :boolean, desc: 'Output raw JSON', default: false
+    output_options
     option :enabled, aliases: '-e', type: :boolean, desc: 'Show only enabled rules'
     def port_forwards
       show_port_forwards
@@ -223,10 +233,9 @@ module UiManage
     # -------------------------------------------------------------------------
 
     desc 'dhcp', 'Show DHCP network configuration, leases, and reservations'
-    option :device,  aliases: '-d', type: :string,  desc: 'Device name'
-    option :json,    aliases: '-j', type: :boolean, desc: 'Output raw JSON', default: false
-    option :all,     aliases: '-a', type: :boolean, desc: 'Show all networks (not just DHCP)', default: false
-    option :leases,  aliases: '-l', type: :boolean, desc: 'Show DHCP leases and static reservations instead of network config', default: false
+    output_options
+    option :all,    aliases: '-a', type: :boolean, desc: 'Show all networks (not just DHCP)', default: false
+    option :leases, aliases: '-l', type: :boolean, desc: 'Show DHCP leases and static reservations instead of network config', default: false
     def dhcp
       show_dhcp
     end
@@ -251,8 +260,7 @@ module UiManage
 
         ui-manage power --off "Pro Max:12"
     DESC
-    option :device, aliases: '-d', type: :string,  desc: 'Device name'
-    option :json,   aliases: '-j', type: :boolean, desc: 'Output raw JSON', default: false
+    output_options
     option :active, aliases: '-a', type: :boolean, desc: 'Show only active PoE ports', default: false
     option :on,     type: :string, desc: 'Turn PoE on for "DEVICE:PORT"'
     option :off,    type: :string, desc: 'Turn PoE off for "DEVICE:PORT"'
@@ -271,11 +279,8 @@ module UiManage
     # -------------------------------------------------------------------------
 
     desc 'ports', 'Show what is connected to each switch/gateway port'
-    option :device, aliases: '-d', type: :string,  desc: 'Device name'
-    option :json,   aliases: '-j', type: :boolean, desc: 'Output raw JSON', default: false
-    option :up,     aliases: '-u', type: :boolean, desc: 'Show only ports that are up', default: false
-    option :anon,   aliases: ['--anonymous'], type: :boolean, default: false,
-                    desc: 'Replace MAC addresses and IP addresses with friendly placeholders'
+    output_options anon: 'Replace MAC addresses and IP addresses with friendly placeholders'
+    option :up, aliases: '-u', type: :boolean, desc: 'Show only ports that are up', default: false
     def ports
       show_ports(anon: Anonymizer.new(options[:anon]))
     end
@@ -285,8 +290,7 @@ module UiManage
     # -------------------------------------------------------------------------
 
     desc 'storage', 'Show storage information'
-    option :device, aliases: '-d', type: :string,  desc: 'Device name'
-    option :json,   aliases: '-j', type: :boolean, desc: 'Output raw JSON', default: false
+    output_options
     def storage
       show_storage
     end
@@ -296,8 +300,7 @@ module UiManage
     # -------------------------------------------------------------------------
 
     desc 'memory', 'Show memory usage'
-    option :device, aliases: '-d', type: :string,  desc: 'Device name'
-    option :json,   aliases: '-j', type: :boolean, desc: 'Output raw JSON', default: false
+    output_options
     def memory
       show_memory
     end
@@ -307,8 +310,7 @@ module UiManage
     # -------------------------------------------------------------------------
 
     desc 'cpu', 'Show CPU usage and load'
-    option :device, aliases: '-d', type: :string,  desc: 'Device name'
-    option :json,   aliases: '-j', type: :boolean, desc: 'Output raw JSON', default: false
+    output_options
     def cpu
       show_cpu
     end
@@ -331,10 +333,7 @@ module UiManage
       (RFC 5737) and MACs use the locally-administered 02:00:00 prefix — so they
       read as unambiguous placeholders rather than real values.
     DESC
-    option :device, aliases: '-d', type: :string,  desc: 'Device name'
-    option :json,   aliases: '-j', type: :boolean, desc: 'Output raw JSON', default: false
-    option :anon,   aliases: ['--anonymous'], type: :boolean, default: false,
-                    desc: 'Replace serial number, MAC address, device ID, and IP address with friendly placeholders'
+    output_options anon: 'Replace serial number, MAC address, device ID, and IP address with friendly placeholders'
     def identity
       show_identity(anon: Anonymizer.new(options[:anon]))
     end
@@ -353,10 +352,7 @@ module UiManage
       --anon (or --anonymous) replaces the public IP, gateway IP, DNS server
       IPs, and WAN MAC address with friendly placeholders.
     DESC
-    option :device, aliases: '-d', type: :string,  desc: 'Device name'
-    option :json,   aliases: '-j', type: :boolean, desc: 'Output raw JSON', default: false
-    option :anon,   aliases: ['--anonymous'], type: :boolean, default: false,
-                    desc: 'Replace IP addresses and MAC address with friendly placeholders'
+    output_options anon: 'Replace IP addresses and MAC address with friendly placeholders'
     def gateway
       show_gateway(anon: Anonymizer.new(options[:anon]))
     end
@@ -383,13 +379,10 @@ module UiManage
       --anon (or --anonymous) replaces IP and MAC addresses with friendly
       placeholders.
     DESC
-    option :device,   aliases: '-d', type: :string,  desc: 'Device name'
-    option :json,     aliases: '-j', type: :boolean, desc: 'Output raw JSON', default: false
+    output_options anon: 'Replace MAC addresses and IP addresses with friendly placeholders'
     option :ip,       aliases: '-i', type: :boolean, default: false, desc: 'Sort by IP address instead of name'
     option :wired,    type: :boolean, default: false, desc: 'Only show wired clients'
     option :wireless, type: :boolean, default: false, desc: 'Only show wireless clients'
-    option :anon,     aliases: ['--anonymous'], type: :boolean, default: false,
-                       desc: 'Replace MAC addresses and IP addresses with friendly placeholders'
     def clients(pattern = nil)
       raise Thor::Error, "ERROR: '--wired' and '--wireless' can't be used together." if options[:wired] && options[:wireless]
 
@@ -413,9 +406,8 @@ module UiManage
       maps to the same placeholder within one report run, so entries stay
       cross-referenceable across sections.
     DESC
-    option :device, aliases: '-d', type: :string,  desc: 'Device name'
-    option :anon,   aliases: ['--anonymous'], type: :boolean, default: false,
-                    desc: 'Replace MAC addresses, IP addresses, serial number, and device ID with friendly placeholders'
+    output_options json: false,
+                   anon: 'Replace MAC addresses, IP addresses, serial number, and device ID with friendly placeholders'
     def report
       anon   = Anonymizer.new(options[:anon])
       client = resolve_client
@@ -463,6 +455,16 @@ module UiManage
 
     private
 
+    # Resolves an --api-key value: "-" reads the key from a hidden prompt (or
+    # stdin when piped) so it never appears in shell history or `ps` output.
+    def read_api_key(value)
+      return value unless value == '-'
+
+      key = ($stdin.tty? ? IO.console.getpass('API key: ') : $stdin.gets.to_s).chomp
+      abort 'No API key provided.' if key.empty?
+      key
+    end
+
     def resolve_client
       config = Config.new
 
@@ -474,24 +476,23 @@ module UiManage
 
       abort 'No devices configured. Run `ui-manage login HOST` to add one.' if dev.nil?
 
-      if dev['encrypted_api_key']
-        Client.new(
-          host:       dev['host'],
-          site:       dev['site'] || 'default',
-          verify_ssl: false,
-          api_key:    Encryption.decrypt(dev['encrypted_api_key']),
-          verbose:    options[:verbose]
-        )
-      else
-        Client.new(
-          host:       dev['host'],
-          site:       dev['site'] || 'default',
-          verify_ssl: false,
-          username:   dev['username'],
-          password:   Encryption.decrypt(dev['encrypted_password']),
-          verbose:    options[:verbose]
-        )
-      end
+      creds =
+        if dev['encrypted_api_key']
+          { api_key: Encryption.decrypt(dev['encrypted_api_key']) }
+        else
+          { username: dev['username'], password: Encryption.decrypt(dev['encrypted_password']) }
+        end
+
+      Client.new(
+        host:       dev['host'],
+        site:       dev['site'] || 'default',
+        verify_ssl: !!dev['verify_ssl'],
+        verbose:    options[:verbose],
+        **creds
+      )
+    rescue ArgumentError, OpenSSL::OpenSSLError => e
+      abort "Could not decrypt stored credentials for '#{dev['name']}' (#{e.message}). " \
+            'Re-run `ui-manage login` for this device.'
     end
 
     def with_client(client = nil)
@@ -615,42 +616,27 @@ module UiManage
 
       reservations = clients.select { |c| c['use_fixedip'] }
       leases       = clients.select { |c| !c['use_fixedip'] && c['ip'] }
+                            .sort_by { |c| ip_sort_key(c['ip']) }
 
-      if reservations.any?
-        rows = reservations.map do |c|
-          [
-            c['name'] || c['hostname'] || '—',
-            anon.mac(c['mac']),
-            anon.ip(c['fixed_ip']),
-            c['oui'] || '—',
-            format_last_seen(c['last_seen'])
-          ]
-        end
-        Formatter.table(
-          ['Name', 'MAC', 'Reserved IP', 'Vendor', 'Last Seen'],
-          rows,
-          title: 'Static Reservations'
-        )
-      end
-
-      if leases.any?
-        rows = leases.sort_by { |c| ip_sort_key(c['ip']) }.map do |c|
-          [
-            c['name'] || c['hostname'] || '—',
-            anon.mac(c['mac']),
-            anon.ip(c['ip']),
-            c['oui'] || '—',
-            format_last_seen(c['last_seen'])
-          ]
-        end
-        Formatter.table(
-          ['Name', 'MAC', 'IP', 'Vendor', 'Last Seen'],
-          rows,
-          title: 'Dynamic Leases'
-        )
-      end
+      lease_table(reservations, anon, title: 'Static Reservations', ip_header: 'Reserved IP', ip_key: 'fixed_ip')
+      lease_table(leases,       anon, title: 'Dynamic Leases',      ip_header: 'IP',          ip_key: 'ip')
 
       say 'No leases or reservations found.' if reservations.empty? && leases.empty?
+    end
+
+    def lease_table(clients, anon, title:, ip_header:, ip_key:)
+      return if clients.empty?
+
+      rows = clients.map do |c|
+        [
+          c['name'] || c['hostname'] || '—',
+          anon.mac(c['mac']),
+          anon.ip(c[ip_key]),
+          c['oui'] || '—',
+          format_last_seen(c['last_seen'])
+        ]
+      end
+      Formatter.table(['Name', 'MAC', ip_header, 'Vendor', 'Last Seen'], rows, title: title)
     end
 
     def show_power(client: nil, anon: Anonymizer.new(false))

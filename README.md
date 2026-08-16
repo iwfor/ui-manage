@@ -16,9 +16,13 @@ Add a device, authenticating with either an API key (Network App 8.x+) or a
 username/password:
 
 ```
-bin/ui-manage login --api-key "$API_KEY" 192.168.1.1
+bin/ui-manage login --api-key - 192.168.1.1     # prompts for the key (or reads piped stdin)
 bin/ui-manage login --username admin 192.168.1.1
 ```
+
+Pass `--verify-ssl` to `login` to enable TLS certificate verification for that
+device (off by default, since UniFi controllers ship with self-signed
+certificates); the setting is saved with the device.
 
 Then run any information command against it:
 
@@ -74,3 +78,22 @@ echo 'eval "$(bin/ui-manage completions zsh)"'  >> ~/.zshrc
 ## Configuration
 
 Device credentials are stored, encrypted, in `~/.config/ui-manage/config.toml`.
+
+## Security
+
+- Credentials are encrypted with AES-256-GCM using a key in
+  `~/.config/ui-manage/secret.key`. Both files are created `0600` (directory
+  `0700`). Since the key lives next to the config, this protects against
+  leaking `config.toml` alone (backups, pastes) — not against an attacker who
+  can read your whole home directory.
+- TLS verification is off by default to accommodate self-signed controller
+  certificates; enable it per device with `login --verify-ssl`. The `devices`
+  command shows each device's TLS mode.
+- Secrets are passed to `curl` via a `0600` config file, never argv, so they
+  don't appear in the process list. `--verbose` output always redacts them.
+- Gem versions are pinned exactly in the `Gemfile`. To check dependencies
+  against the ruby-advisory-db:
+
+  ```
+  bundle exec bundle-audit check --update
+  ```

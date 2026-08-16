@@ -1,3 +1,7 @@
+module UiManage
+  CONFIG_DIR = File.join(Dir.home, '.config', 'ui-manage')
+end
+
 require_relative 'ui_manage/encryption'
 require_relative 'ui_manage/config'
 require_relative 'ui_manage/client'

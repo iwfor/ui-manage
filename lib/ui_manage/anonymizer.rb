@@ -26,42 +26,28 @@ module UiManage
     def enabled? = @enabled
 
     def ip(value)
-      return value unless @enabled
-      return value if value.nil? || value.to_s.empty?
       return value if IP_WILDCARDS.include?(value.to_s)
 
-      @ips[value] ||= begin
-        n     = @ips.size
+      placeholder(@ips, value) do |n|
         block = IP_BLOCKS[(n / 254) % IP_BLOCKS.length]
-        octet = (n % 254) + 1
-        "#{block}.#{octet}"
+        "#{block}.#{(n % 254) + 1}"
       end
     end
 
     def mac(value)
-      return value unless @enabled
-      return value if value.nil? || value.to_s.empty?
-
-      @macs[value] ||= begin
-        n = @macs.size
-        # 02:00:00 is a locally-administered OUI prefix — never assigned to real
-        # hardware, so it reads as obviously synthetic.
+      # 02:00:00 is a locally-administered OUI prefix — never assigned to real
+      # hardware, so it reads as obviously synthetic.
+      placeholder(@macs, value) do |n|
         format('02:00:00:%02X:%02X:%02X', (n >> 16) & 0xFF, (n >> 8) & 0xFF, n & 0xFF)
       end
     end
 
     def serial(value)
-      return value unless @enabled
-      return value if value.nil? || value.to_s.empty?
-
-      @serials[value] ||= format('ANON%08d', @serials.size + 1)
+      placeholder(@serials, value) { |n| format('ANON%08d', n + 1) }
     end
 
     def device_id(value)
-      return value unless @enabled
-      return value if value.nil? || value.to_s.empty?
-
-      @device_ids[value] ||= format('%024x', @device_ids.size + 1)
+      placeholder(@device_ids, value) { |n| format('%024x', n + 1) }
     end
 
     # Scans free-form text for embedded IPs (with optional /cidr) and MACs and
@@ -90,6 +76,18 @@ module UiManage
       when String then scrub(obj)
       else obj
       end
+    end
+
+    private
+
+    # Returns the stable placeholder for value, generating one from the cache
+    # size on first sight; passes value through untouched when anonymization is
+    # disabled or the value is blank.
+    def placeholder(cache, value)
+      return value unless @enabled
+      return value if value.nil? || value.to_s.empty?
+
+      cache[value] ||= yield(cache.size)
     end
   end
 end
