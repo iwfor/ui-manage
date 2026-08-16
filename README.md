@@ -26,6 +26,7 @@ Then run any information command against it:
 bin/ui-manage identity
 bin/ui-manage ports
 bin/ui-manage clients --ip
+bin/ui-manage clients --wired
 bin/ui-manage report
 ```
 
@@ -48,7 +49,7 @@ Run `bin/ui-manage help` for the full command list, or
 | `identity` | Device name, serial, MAC, firmware, and other identifiers |
 | `cpu` / `memory` / `storage` | System health |
 | `gateway` | Internet (WAN) status |
-| `clients` | Every wired/wireless client on the network |
+| `clients [PATTERN]` | Every wired/wireless client on the network; `--wired`/`--wireless` filters by connection type |
 | `ports` | What's connected to each switch/gateway port |
 | `power` | PoE devices/ports and their power state; `--on`/`--off "DEVICE:PORT"` toggles a port |
 | `firewall` | Firewall rules |
