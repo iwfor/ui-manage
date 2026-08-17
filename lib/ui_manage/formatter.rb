@@ -7,7 +7,9 @@ module UiManage
       puts JSON.pretty_generate(data)
     end
 
-    def self.table(headings, rows, title: nil)
+    def self.table(headings, rows, title: nil, sort: nil)
+      rows = sort_rows(headings, rows, sort) if sort && !rows.empty?
+
       t = Terminal::Table.new(
         title:    title,
         headings: headings,
@@ -15,6 +17,41 @@ module UiManage
       )
       t.style = { border_x: '-', border_y: '|', border_i: '+' }
       puts t
+    end
+
+    # Sorts +rows+ by the column in +headings+ that matches +sort+: an exact
+    # (case-insensitive) column name, or a fragment unique to one column.
+    def self.sort_rows(headings, rows, sort)
+      idx = sort_column_index(headings, sort)
+      rows.sort_by { |row| sort_key(row[idx]) }
+    end
+
+    def self.sort_column_index(headings, sort)
+      names  = headings.map(&:to_s)
+      needle = sort.downcase
+
+      exact = names.index { |h| h.downcase == needle }
+      return exact if exact
+
+      matches = names.each_index.select { |i| !names[i].empty? && names[i].downcase.include?(needle) }
+      case matches.size
+      when 0
+        abort "ERROR: no column matches #{sort.inspect}. Available columns: #{names.reject(&:empty?).join(', ')}"
+      when 1
+        matches.first
+      else
+        abort "ERROR: #{sort.inspect} matches multiple columns (#{matches.map { |i| names[i] }.join(', ')}) " \
+              '— use a more specific name.'
+      end
+    end
+
+    # Numbers sort numerically and before text; everything else sorts as
+    # case-insensitive text. Multi-line cells sort on their first line.
+    def self.sort_key(val)
+      str = val.to_s
+      str = str.lines.first.to_s.chomp if str.include?("\n")
+
+      /\A-?\d+(\.\d+)?\z/.match?(str) ? [0, str.to_f] : [1, str.downcase]
     end
 
     def self.kv(pairs, title: nil)

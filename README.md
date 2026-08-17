@@ -65,6 +65,14 @@ Most information commands support `--json` for raw output and
 identifiers with realistic-looking placeholders — useful for sharing output
 (bug reports, screenshots) without exposing real network details.
 
+Every command whose default output is a table supports `-s/--sort COLUMN`,
+where `COLUMN` is a column name or a unique fragment of one (case-insensitive):
+
+```
+bin/ui-manage clients --sort mac
+bin/ui-manage port-forwards --sort "int.port"
+```
+
 Pass `-v/--verbose` on any command to print the curl commands being executed
 (secrets are always redacted).
 

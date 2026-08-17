@@ -137,6 +137,7 @@ module UiManage
     end
 
     desc 'devices', 'List configured devices'
+    option :sort, aliases: '-s', type: :string, desc: 'Sort by column name (or a unique fragment of one)'
     def devices
       config  = Config.new
       devs    = config.devices
@@ -157,7 +158,8 @@ module UiManage
       Formatter.table(
         ['', 'Name', 'Host', 'Site', 'Auth', 'TLS'],
         rows,
-        title: 'Configured Devices (* = default)'
+        title: 'Configured Devices (* = default)',
+        sort:  options[:sort]
       )
     end
 
@@ -212,6 +214,7 @@ module UiManage
     output_options
     option :ruleset, aliases: '-r', type: :string,  desc: 'Filter by ruleset (WAN_IN, WAN_OUT, LAN_IN, etc.)'
     option :enabled, aliases: '-e', type: :boolean, desc: 'Show only enabled rules'
+    option :sort,    aliases: '-s', type: :string,  desc: 'Sort by column name (or a unique fragment of one)'
     def firewall
       show_firewall
     end
@@ -224,6 +227,7 @@ module UiManage
     map 'port-forwards' => :port_forwards
     output_options
     option :enabled, aliases: '-e', type: :boolean, desc: 'Show only enabled rules'
+    option :sort,    aliases: '-s', type: :string,  desc: 'Sort by column name (or a unique fragment of one)'
     def port_forwards
       show_port_forwards
     end
@@ -236,6 +240,7 @@ module UiManage
     output_options
     option :all,    aliases: '-a', type: :boolean, desc: 'Show all networks (not just DHCP)', default: false
     option :leases, aliases: '-l', type: :boolean, desc: 'Show DHCP leases and static reservations instead of network config', default: false
+    option :sort,   aliases: '-s', type: :string,  desc: 'Sort by column name (or a unique fragment of one)'
     def dhcp
       show_dhcp
     end
@@ -264,6 +269,7 @@ module UiManage
     option :active, aliases: '-a', type: :boolean, desc: 'Show only active PoE ports', default: false
     option :on,     type: :string, desc: 'Turn PoE on for "DEVICE:PORT"'
     option :off,    type: :string, desc: 'Turn PoE off for "DEVICE:PORT"'
+    option :sort,   aliases: '-s', type: :string, desc: 'Sort by column name (or a unique fragment of one)'
     def power
       abort 'Use either --on or --off, not both.' if options[:on] && options[:off]
 
@@ -280,7 +286,8 @@ module UiManage
 
     desc 'ports', 'Show what is connected to each switch/gateway port'
     output_options anon: 'Replace MAC addresses and IP addresses with friendly placeholders'
-    option :up, aliases: '-u', type: :boolean, desc: 'Show only ports that are up', default: false
+    option :up,   aliases: '-u', type: :boolean, desc: 'Show only ports that are up', default: false
+    option :sort, aliases: '-s', type: :string,  desc: 'Sort by column name (or a unique fragment of one)'
     def ports
       show_ports(anon: Anonymizer.new(options[:anon]))
     end
@@ -291,6 +298,7 @@ module UiManage
 
     desc 'storage', 'Show storage information'
     output_options
+    option :sort, aliases: '-s', type: :string, desc: 'Sort by column name (or a unique fragment of one)'
     def storage
       show_storage
     end
@@ -374,7 +382,9 @@ module UiManage
       connection type; they can't be used together.
 
       Sorted by name by default; use --ip to sort by IP address instead.
-      Clients with no IP address are listed last.
+      Clients with no IP address are listed last. --sort overrides both,
+      sorting by any column name or a unique fragment of one (e.g. --sort
+      mac, --sort "last seen").
 
       --anon (or --anonymous) replaces IP and MAC addresses with friendly
       placeholders.
@@ -383,6 +393,7 @@ module UiManage
     option :ip,       aliases: '-i', type: :boolean, default: false, desc: 'Sort by IP address instead of name'
     option :wired,    type: :boolean, default: false, desc: 'Only show wired clients'
     option :wireless, type: :boolean, default: false, desc: 'Only show wireless clients'
+    option :sort,     aliases: '-s', type: :string, desc: 'Sort by column name (or a unique fragment of one) — overrides --ip'
     def clients(pattern = nil)
       raise Thor::Error, "ERROR: '--wired' and '--wireless' can't be used together." if options[:wired] && options[:wireless]
 
@@ -541,7 +552,8 @@ module UiManage
       Formatter.table(
         %w[Name Enabled Ruleset Index Action Protocol Source Destination],
         rows,
-        title: 'Firewall Rules'
+        title: 'Firewall Rules',
+        sort:  options[:sort]
       )
     end
 
@@ -572,7 +584,8 @@ module UiManage
       Formatter.table(
         %w[Name Enabled Protocol Source Ext.Port Forward.IP Int.Port Log],
         rows,
-        title: 'Port Forwarding Rules'
+        title: 'Port Forwarding Rules',
+        sort:  options[:sort]
       )
     end
 
@@ -605,7 +618,8 @@ module UiManage
       Formatter.table(
         ['Network', 'Subnet', 'DHCP Start', 'DHCP Stop', 'Lease', 'DNS', 'VLAN', 'Purpose'],
         rows,
-        title: options[:all] ? 'Networks' : 'DHCP Networks'
+        title: options[:all] ? 'Networks' : 'DHCP Networks',
+        sort:  options[:sort]
       )
     end
 
@@ -636,7 +650,7 @@ module UiManage
           format_last_seen(c['last_seen'])
         ]
       end
-      Formatter.table(['Name', 'MAC', ip_header, 'Vendor', 'Last Seen'], rows, title: title)
+      Formatter.table(['Name', 'MAC', ip_header, 'Vendor', 'Last Seen'], rows, title: title, sort: options[:sort])
     end
 
     def show_power(client: nil, anon: Anonymizer.new(false))
@@ -673,7 +687,8 @@ module UiManage
       Formatter.table(
         %w[Device Port Name Mode Status Power Voltage Current],
         rows,
-        title: 'PoE Port Power'
+        title: 'PoE Port Power',
+        sort:  options[:sort]
       )
     end
 
@@ -783,7 +798,8 @@ module UiManage
       Formatter.table(
         %w[Device Port Name Status Speed PoE Connected],
         rows,
-        title: 'Ports'
+        title: 'Ports',
+        sort:  options[:sort]
       )
     end
 
@@ -818,7 +834,8 @@ module UiManage
       Formatter.table(
         %w[Name Type Size Used Available Use% Mount],
         rows,
-        title: 'Storage'
+        title: 'Storage',
+        sort:  options[:sort]
       )
     end
 
@@ -1017,7 +1034,8 @@ module UiManage
       Formatter.table(
         ['Name', 'IP', 'MAC', 'Type', 'Connected Via', 'Signal', 'Last Seen'],
         rows,
-        title: "Clients (#{rows.size})"
+        title: "Clients (#{rows.size})",
+        sort:  options[:sort]
       )
     end
 
