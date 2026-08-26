@@ -6,15 +6,7 @@ module UiManage
     # is also what proves the engine's own mechanics against real check code
     # rather than only against test doubles.
     class ChecksTest < TestCase
-      def report_for(id, routes = {}, **options)
-        routes, options = split_routes(routes, options)
-        device   = options.fetch(:device, {})
-        settings = options[:settings]
-        client  = Client.new(host: 'unifi.test', api_key: 'k', transport: stub_transport(routes))
-        context = Context.new(client: client, device: device,
-                              settings: settings || Settings.new(path: nil))
-        Runner.new(context: context, checks: [Registry.find(id)]).run
-      end
+      def report_for(id, routes = {}, **options) = audit_report(id, routes, **options)
 
       def wlan(**overrides)
         { 'name' => 'Home', 'enabled' => true, 'security' => 'wpapsk', 'wpa_mode' => 'wpa2',

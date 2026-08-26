@@ -64,6 +64,20 @@ module UiManage
       out
     end
 
+    # Runs one audit check against a stubbed controller and returns its Report.
+    # `device:` supplies the audit policy, `settings:` the thresholds.
+    def audit_report(id, routes = {}, **options)
+      routes, options = split_routes(routes, options)
+      client  = Client.new(host: 'unifi.test', api_key: 'k', transport: stub_transport(routes))
+      context = Audit::Context.new(
+        client:   client,
+        device:   options.fetch(:device, {}),
+        settings: options[:settings] || Audit::Settings.new(path: nil)
+      )
+      check = Audit::Registry.find(id) or raise "No such check: #{id}"
+      Audit::Runner.new(context: context, checks: [check]).run
+    end
+
     def assert_aborts(message_fragment)
       err = capture_io { assert_raises(SystemExit) { yield } }
       assert_includes err.join, message_fragment

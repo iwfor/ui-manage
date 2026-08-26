@@ -302,18 +302,9 @@ module UiManage
       )
     end
 
-    # Which field carries the 2FA state depends on the controller version, and
-    # some versions report none at all. "unknown" is the honest answer there —
-    # an audit must not read a missing field as "no 2FA configured".
-    TOTP_KEYS = %w[x_has_totp has_totp totp_enabled x_totp_secret].freeze
-
-    def two_factor_label(admin)
-      key = TOTP_KEYS.find { |k| admin.key?(k) }
-      return 'unknown' unless key
-
-      value = admin[key]
-      value.nil? || value == false || value == '' ? 'no' : 'yes'
-    end
+    # Reading lives in AdminAccount so the audit check agrees with this view,
+    # including that "unknown" is distinct from "no".
+    def two_factor_label(admin) = AdminAccount.two_factor(admin).to_s
 
     def show_rogue_aps(client: nil, anon: Anonymizer.new(false))
       client ||= resolve_client
@@ -362,12 +353,12 @@ module UiManage
       return '?' if ours.nil?
       return '-' if essid.to_s.empty?
 
-      ours.include?(essid.downcase) ? 'IMPERSONATES' : 'no'
+      WlanSecurity.impersonates?(essid, ours) ? 'IMPERSONATES' : 'no'
     end
 
     def our_ssids(client)
       wlans = client.optional(:wlans)
-      wlans&.map { |w| w['name'].to_s.downcase }
+      wlans && WlanSecurity.ssid_names(wlans)
     end
 
     def show_vpn(client: nil, anon: Anonymizer.new(false))

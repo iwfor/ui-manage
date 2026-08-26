@@ -60,5 +60,17 @@ module UiManage
     def pmf_mode(wlan) = (wlan['pmf_mode'] || 'disabled').to_s
 
     def passphrase(wlan) = wlan['x_passphrase'].to_s
+
+    # The SSIDs this site broadcasts, lowercased for comparison.
+    def ssid_names(wlans) = Array(wlans).map { |w| w['name'].to_s.downcase }.reject(&:empty?)
+
+    # Whether an access point this site does not manage is broadcasting one of
+    # our SSIDs — the evil-twin case. A blank ESSID is a hidden network, not a
+    # match.
+    def impersonates?(essid, ssid_names)
+      return false if essid.to_s.empty?
+
+      Array(ssid_names).include?(essid.to_s.downcase)
+    end
   end
 end

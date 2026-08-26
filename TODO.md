@@ -135,59 +135,89 @@ Reference checks shipped (the rest come in Phases 4 and 5):
 **Not yet reachable from the CLI** — the `audit` command is Phase 6. The
 engine is exercised through tests until then.
 
-## Phase 4 — Security checks
+## Phase 4 — Security checks  ✅ done
+
+21 security checks ship. Each is one file under `lib/ui_manage/audit/checks/`.
 
 **Wireless**
-- [ ] Open / WEP / WPA1 / TKIP SSID — critical
-- [ ] PSK shorter than threshold, or known-weak/default — high
-- [ ] WPS enabled — high
-- [ ] PMF disabled on a WPA3-capable SSID — medium
-- [ ] Guest SSID without guest policy / L2 isolation — high
-- [ ] Guest network able to reach RFC1918 LAN ranges — critical
-- [ ] SSID broadcasting on the management VLAN — high
-- [ ] Rogue AP advertising one of our SSIDs (evil twin) — critical
+- [x] `wlan_encryption` — open / WEP / WPA1 / TKIP / WPS, one finding per
+      weakness, severity per weakness
+- [x] `wlan_passphrase` — shorter than `min_passphrase_chars`
+- [x] `wlan_pmf` — protected management frames disabled
+- [x] `wlan_guest_network` — guest SSID mapped to a non-guest network
+- [x] `rogue_ap_impersonation` — unmanaged AP broadcasting one of our SSIDs
 
 **Perimeter**
-- [ ] Port forward exposing a sensitive port (22/23/445/3389/5900/1433/3306/
-      5432/27017/6379/9200) — critical
-- [ ] Port forward with source `any` — high
-- [ ] Port forward targeting the gateway/controller itself — critical
-- [ ] UPnP enabled — high
-- [ ] Remote/cloud access disagreeing with `policy --remote-access` — medium
-- [ ] WAN-facing management (SSH/HTTPS reachable from WAN) — critical
-- [ ] DDNS credentials stored in cleartext — low
+- [x] `port_forward_sensitive` — forwards covering `sensitive_ports`
+- [x] `port_forward_open_source` — forward accepting any source
+- [x] `upnp_enabled`
+- [x] `remote_access` — controller vs. `ui-manage policy` (Phase 3)
+- [x] `controller_tls` — this tool connecting without certificate verification
 
 **Firewall**
-- [ ] `WAN_IN` default-accept, or any accept-any-any rule — critical
-- [ ] Disabled security-relevant rules — medium
-- [ ] Drop/reject rules with logging off — low
-- [ ] No inter-VLAN restriction between IoT/guest and trusted VLANs — high
-- [ ] Firewall groups referenced by no rule — info
+- [x] `firewall_permissive_rule` — any-to-any accept, critical from the WAN
+- [x] `firewall_rule_logging` — blocking rules without logging (one finding
+      for the set, not one per rule)
+- [x] `firewall_unused_group`
 
 **Access control**
-- [ ] Admin without 2FA — high
-- [ ] More than N super-admins — medium
-- [ ] Admin idle >90 days — medium
-- [ ] Device SSH enabled — medium; SSH password auth rather than keys — high
-- [ ] Default/shared device SSH credentials — critical
-- [ ] SNMP v1/v2c enabled, or community `public` — high
-- [ ] Weak/default RADIUS shared secret — high
+- [x] `admin_two_factor` — critical for super admins; skips entirely when the
+      controller reports no 2FA state; reports the gap at info when it
+      reports for some accounts and not others
+- [x] `admin_super_count` — above `max_super_admins`
+- [x] `device_ssh` — enabled; password-only outranks key-based
+- [x] `snmp_insecure` — v1/v2c enabled, default community string
 
 **Threat posture**
-- [ ] IDS/IPS disabled or detect-only — high
-- [ ] IPS signature set stale — medium
-- [ ] Unacknowledged IPS detections in the last 24h — high
-- [ ] Auto firmware updates disabled — medium
-- [ ] Firmware with a known advisory — critical (needs a bundled advisory list)
-- [ ] Controller TLS unverified (reuse per-device `verify_ssl`) — medium
+- [x] `ips_disabled` — off, or detect-only
+- [x] `ips_recent_detections` — grouped by signature
+- [x] `auto_firmware_updates`
+- [x] `device_unadopted` — pending adoption or failed adoption
 
-**Network hygiene**
-- [ ] Unknown/unnamed client on a trusted VLAN — medium
-- [ ] IoT-OUI client on the default VLAN — low
-- [ ] Untrusted port without 802.1X or isolation — medium
-- [ ] Unadopted or pending-adoption device — high
+Supporting work:
+- [x] `Check#setting_value` — reads a settings field, skipping when the
+      controller does not report it. Several field names may be given, since
+      they drift across versions.
+- [x] Shared `PortSpec` (port ranges/lists), `AdminAccount` (2FA state),
+      `WlanSecurity.ssid_names`/`impersonates?`
+- [x] 50 new tests
 
----
+Decisions taken along the way:
+- Settings-backed checks all route through `setting_value`, because the
+  dangerous failure is silent: a field the controller never sent reads as
+  nil, nil looks falsy, and the check would report "SSH is disabled" about a
+  controller that never mentioned SSH. They skip instead.
+- `firewall_rule_logging` emits one finding for the whole set. A site that
+  never enabled logging would otherwise bury every other finding.
+- Credentials never reach a Finding: `wlan_passphrase` reports length,
+  `snmp_insecure` reports "is a default" rather than the community string.
+
+Deferred, with reasons — worth revisiting:
+- [ ] Inter-VLAN restriction between IoT/guest and trusted networks. Needs
+      rules cross-referenced against networks; the most valuable check still
+      missing.
+- [ ] WAN-facing management (SSH/HTTPS reachable from the internet). Needs
+      `WAN_LOCAL` rule analysis.
+- [ ] Weak/default RADIUS shared secret. Did not want to guess the field
+      name without a real controller to check against.
+- [ ] Firmware with a known advisory. Needs a bundled advisory list and a
+      refresh mechanism — a project of its own.
+- [ ] IPS signature set staleness. No signature-date field confirmed.
+- [ ] Unknown client on a trusted VLAN; IoT-OUI client on the default VLAN.
+      Both are noisy without tuning, and the second needs an OUI database.
+- [ ] Untrusted switch port without 802.1X or isolation.
+
+Dropped deliberately:
+- `WAN_IN` default-accept — `/rest/firewallrule` does not expose the
+  per-ruleset default action.
+- Disabled security-relevant rules — no way to tell "disabled by mistake"
+  from "disabled deliberately"; it would be pure noise.
+- SSID on the management VLAN — no reliable way to identify which network is
+  the management one from the API.
+- DDNS credentials in cleartext — the controller must store a usable
+  credential for DDNS to work, so this is not actionable.
+- Admin idle >90 days — the admin payload carries no reliable last-login
+  time.
 
 ## Phase 5 — Health checks
 

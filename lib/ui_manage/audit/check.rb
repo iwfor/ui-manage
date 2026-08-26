@@ -93,6 +93,24 @@ module UiManage
       # A named section of /get/setting, or nil when the controller has none.
       def setting(key) = context.setting(key)
 
+      # Reads one field from a settings section, skipping the check when the
+      # controller does not report it.
+      #
+      # Field names drift across Network application versions, so several may be
+      # given and the first present one wins. This exists because the failure
+      # mode it prevents is the dangerous one: a field the controller never sent
+      # reads as nil, nil looks falsy, and a check would quietly report "SSH is
+      # disabled" about a controller that simply never mentioned SSH.
+      def setting_value(section_key, *field_names)
+        section = setting(section_key)
+        skip!("the controller reports no '#{section_key}' settings section") if section.nil?
+
+        present = field_names.find { |field| section.key?(field) }
+        skip!("the controller's '#{section_key}' settings do not include #{field_names.join(' or ')}") if present.nil?
+
+        section[present]
+      end
+
       def finding(message:, subject: nil, severity: nil, evidence: nil)
         findings << Finding.new(
           check_id:    self.class.id,
