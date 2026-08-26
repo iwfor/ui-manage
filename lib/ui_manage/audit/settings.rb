@@ -17,6 +17,7 @@ module UiManage
         'memory_percent'       => 85,
         'temperature_celsius'  => 80,
         'storage_percent'      => 85,
+        'poe_budget_percent'   => 85,
         'recent_reboot_hours'  => 1,
 
         # Uplink
@@ -27,6 +28,11 @@ module UiManage
         'min_rssi_dbm'         => -72,
         'max_retry_percent'    => 20,
         'channel_util_percent' => 60,
+
+        # Errors as a percentage of packets, rather than a raw count:
+        # counters are cumulative since boot, so a long-running device
+        # accumulates a few harmlessly.
+        'port_error_rate_percent' => 0.1,
 
         # Addressing
         'dhcp_pool_percent'    => 85,

@@ -88,6 +88,8 @@ module UiManage
 
       def threshold(name) = context.threshold(name)
 
+      def gateway = context.gateway
+
       def policy(name) = context.policy(name)
 
       # A named section of /get/setting, or nil when the controller has none.

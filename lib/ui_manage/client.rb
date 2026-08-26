@@ -141,11 +141,15 @@ module UiManage
       network_post('/stat/report/daily.site', body: { attrs: attrs, start: start, end: now })
     end
 
-    def gateway_device
-      devs = devices
-      devs.find { |d| d['type'] == 'udm' } ||
-        devs.find { |d| d.key?('sys_stats') } ||
-        devs.first
+    def gateway_device = self.class.gateway_of(devices)
+
+    # Which device carries the gateway/controller figures — WAN state,
+    # storage, memory. Defined here rather than inline so the audit
+    # context picks the same device this does.
+    def self.gateway_of(devices)
+      devices.find { |d| d['type'] == 'udm' } ||
+        devices.find { |d| d.key?('sys_stats') } ||
+        devices.first
     end
 
     # Calls an endpoint that may not be available, returning nil instead of

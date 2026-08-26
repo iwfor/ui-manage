@@ -219,29 +219,69 @@ Dropped deliberately:
 - Admin idle >90 days — the admin payload carries no reliable last-login
   time.
 
-## Phase 5 — Health checks
+## Phase 5 — Health checks  ✅ done
 
-- [ ] Device offline / disconnected / adopting — critical
-- [ ] Firmware update available — medium
-- [ ] CPU, memory, temperature over threshold — high
-- [ ] Storage over threshold — high
-- [ ] Uptime under 1h (unexpected reboot) — medium
-- [ ] WAN down or failover active — critical
-- [ ] WAN latency / packet loss over threshold — high
-- [ ] Port errors/CRC/drops climbing — medium
-- [ ] Port speed or duplex mismatch — medium
-- [ ] PoE draw near budget — high
-- [ ] DHCP pool >85% utilized — high
-- [ ] Overlapping subnets, or a reservation outside its pool — high
-- [ ] Duplicate static IP / reservation collisions — high
-- [ ] Clients below RSSI floor, or with high TX-retry % — medium
-- [ ] Own-AP channel overlap / co-channel interference — medium
-- [ ] Channel utilization over threshold — medium
-- [ ] NTP unsynchronized — medium
-- [ ] Site backup older than N days — high
-- [ ] Alarm count spike vs the 7-day baseline — medium
+18 health checks ship, bringing the registry to 39.
 
----
+**Devices**
+- [x] `device_offline` (Phase 3)
+- [x] `device_cpu` (Phase 3)
+- [x] `device_memory` — from a reported percentage or raw totals
+- [x] `device_temperature` — named sensor arrays or a single field
+- [x] `device_storage`
+- [x] `device_recent_reboot`
+- [x] `firmware_update_available`
+
+**Uplink**
+- [x] `wan_status` — down, and running on failover while the primary is up
+- [x] `wan_latency` — latency and loss
+
+**Ports**
+- [x] `port_errors` — judged as a rate, not a count
+- [x] `port_duplex`
+- [x] `poe_budget`
+
+**Addressing**
+- [x] `dhcp_pool_exhaustion`
+- [x] `subnet_overlap`
+- [x] `dhcp_reservation` — duplicates and out-of-range
+
+**Wireless**
+- [x] `wifi_client_quality` — RSSI floor and retry rate
+- [x] `radio_channel_overlap` — same and adjacent channels on 2.4 GHz
+- [x] `radio_utilization`
+
+Supporting work:
+- [x] New thresholds: `poe_budget_percent`, `port_error_rate_percent`
+- [x] `Client.gateway_of` extracted so `Context#gateway` picks the same
+      device the client does
+- [x] 47 new tests
+
+Decisions taken along the way:
+- `port_errors` judges an error *rate* against packets, not a raw count.
+  The counters are cumulative since boot, so a raw threshold would either
+  miss a failing port on a freshly rebooted device or flag every healthy
+  port on one that has been up a year.
+- Checks that measure something not every device reports — temperature, PoE
+  budget, radio utilization — skip when *nothing* reports it, rather than
+  passing. Passing would claim the fleet is cool, or under budget, when
+  nothing was measured.
+- A missing WAN loss figure is left alone rather than read as zero loss.
+- `wifi_client_quality` groups into one finding per problem rather than one
+  per client: on a busy network the individual clients change constantly and
+  the actionable fact is how many there are.
+- `radio_channel_overlap` treats 2.4 GHz separately, where channels are
+  20 MHz wide but 5 MHz apart, so neighbours interfere even on different
+  numbers. 5 and 6 GHz only overlap on an exact match.
+
+Deferred, with reasons:
+- [ ] NTP synchronisation. The settings carry the configured servers but not
+      whether the clock is actually in sync.
+- [ ] Site backup age. No endpoint for listing backups confirmed.
+- [ ] Alarm count against a 7-day baseline. Belongs with the `--baseline`
+      work in Phase 6, which is where trend comparison lives.
+- [ ] Port speed below what the port and cable can carry. `speed_caps` is a
+      bitmask that needs decoding against each model.
 
 ## Phase 6 — `audit` command
 

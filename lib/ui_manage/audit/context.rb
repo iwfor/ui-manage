@@ -35,6 +35,15 @@ module UiManage
 
       def threshold(name) = settings.threshold(name)
 
+      # The gateway/controller device, where WAN, storage, and memory
+      # figures live. nil when the device list could not be read.
+      def gateway
+        return @gateway if defined?(@gateway)
+
+        devices  = data(:devices)
+        @gateway = devices && Client.gateway_of(devices)
+      end
+
       # A value from the device's audit policy — what the operator said this
       # network is supposed to look like. nil means they have not said.
       def policy(name) = device[name.to_s]
