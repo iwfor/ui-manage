@@ -56,6 +56,7 @@ Run `bin/ui-manage help` for the full command list, or
 | `devices` | List configured devices |
 | `policy` | Show or set a device's audit policy |
 | `completions SHELL` | Print a bash or zsh completion script |
+| `audit [CATEGORY]` | Run a health and security audit |
 | `report` | Run every information command against a device and print them together |
 | `identity` | Device name, serial, MAC, firmware, and other identifiers |
 | `cpu` / `memory` / `storage` | System health |
@@ -101,6 +102,61 @@ Pass `-v/--verbose` on any command to print the curl commands being executed
 echo 'eval "$(bin/ui-manage completions bash)"' >> ~/.bashrc
 echo 'eval "$(bin/ui-manage completions zsh)"'  >> ~/.zshrc
 ```
+
+## Auditing
+
+```
+bin/ui-manage audit                    # everything
+bin/ui-manage audit security           # or health
+bin/ui-manage audit --severity high    # only what matters most
+bin/ui-manage audit --list-checks      # what it looks at
+bin/ui-manage audit --explain wlan_pmf # what one check means
+```
+
+Each check reports one of four outcomes, and the last two are kept apart
+deliberately:
+
+| | |
+| --- | --- |
+| **pass** | ran, found nothing |
+| **fail** | found something, reported as findings |
+| **skipped** | could not run — the controller or this credential would not provide the data. **Not a pass**, and listed separately so it cannot be read as one |
+| **errored** | the check itself failed. The run continues; the exit status is 2 |
+
+API keys in particular cannot read the admin interface on most controllers,
+so a run authenticated with one will skip several checks and say so.
+
+Findings are ranked `info`, `low`, `medium`, `high`, `critical`.
+
+### On a schedule
+
+`--fail-on` sets the exit status, which is what makes this usable from cron
+or CI:
+
+```
+bin/ui-manage audit --fail-on high --format json --output audit.json
+```
+
+| Exit | Meaning |
+| --- | --- |
+| `0` | nothing at or above the threshold |
+| `1` | findings at or above it |
+| `2` | a check errored, so the run is incomplete |
+
+A baseline reports only what has changed since a known-good run — and what
+has since been fixed:
+
+```
+bin/ui-manage audit --save-baseline ~/net-baseline.json
+bin/ui-manage audit --baseline ~/net-baseline.json --fail-on high
+```
+
+### Output
+
+`--format` renders a table (default), `json`, `markdown`, or a
+self-contained `html` page; `--output FILE` writes to a file. `--summary`
+prints counts only, `--all` includes checks that passed, and `--remediate`
+adds how to fix each finding.
 
 ## Sharing output safely
 

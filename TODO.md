@@ -283,23 +283,39 @@ Deferred, with reasons:
 - [ ] Port speed below what the port and cable can carry. `speed_caps` is a
       bitmask that needs decoding against each model.
 
-## Phase 6 — `audit` command
+## Phase 6 — `audit` command  ✅ done
 
-- [ ] `audit [CATEGORY]` — all / `health` / `security`
-- [ ] `--severity LEVEL` — report at or above
-- [ ] `--fail-on LEVEL` — exit code (0 clean / 1 findings / 2 error) for cron and CI
-- [ ] `--format table|json|markdown|html`
-- [ ] `--check ID` / `--skip ID` (repeatable, glob-friendly)
-- [ ] `--list-checks`, `--explain ID`, `--summary`, `--all`
-- [ ] `--anon` throughout
-- [ ] `--output FILE`
-- [ ] `--baseline save FILE` / `--baseline FILE` — diff against a known-good
-      snapshot; this is what turns it into ongoing monitoring
-- [ ] `--remediate` — print the UniFi UI path or API call per finding
-- [ ] Put `audit` in its own tier in `sort_commands!`
-- [ ] Fold an audit summary into `report`
+- [x] `audit [CATEGORY]` — all / `security` / `health`
+- [x] `--severity LEVEL`
+- [x] `--fail-on LEVEL` — exit 0 clean / 1 findings / 2 errored
+- [x] `--format table|json|markdown|html`
+- [x] `--check` / `--skip`, glob-friendly
+- [x] `--list-checks`, `--explain ID`, `--summary`, `--all`, `--remediate`
+- [x] `--anon` throughout
+- [x] `--output FILE`
+- [x] `--baseline FILE` / `--save-baseline FILE`, reporting what is new and
+      what has been resolved
+- [x] `audit` sits with `report` in its own tier in `sort_commands!`
+- [x] Audit summary folded into `report`
+- [x] Renderers (moved forward from Phase 7): table with severity colour,
+      json, markdown, self-contained html
+- [x] 44 new tests
 
----
+Decisions taken along the way:
+- Every renderer has a distinct "Not checked" section, and the markdown and
+  html ones say in words that these are not passes. The distinction only
+  matters if it survives into the output someone actually reads.
+- `--baseline` reports resolved findings as well as new ones. A scheduled
+  audit that only ever reports new problems never tells you anything got
+  better.
+- Baseline files carry a format version and are refused rather than
+  misread if it does not match.
+- The JSON renderer routes through `Redactor`, like every other JSON path.
+- `report` gets the audit *summary* only. The findings belong to `audit`,
+  which can rank and filter them.
+- The test harness now applies Thor's option defaults when constructing a
+  command directly, which it previously did not — tests were seeing nil
+  where a real invocation sees the declared default.
 
 ## Phase 7 — Supporting work
 

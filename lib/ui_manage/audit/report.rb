@@ -16,6 +16,19 @@ module UiManage
         all.sort_by { |f| [-Severity.rank(f.severity), f.check_id.to_s, f.subject.to_s] }
       end
 
+      # A copy carrying only the findings that pass +filter+, used by
+      # --baseline to narrow a run to what is new without losing the
+      # check-level summary.
+      def only(&filter)
+        narrowed = results.map do |result|
+          next result unless result.failed?
+
+          kept = result.findings.select(&filter)
+          kept.empty? ? Result.pass(result.check) : Result.fail(result.check, kept)
+        end
+        Report.new(results: narrowed, suppressed: suppressed)
+      end
+
       def failed  = results.select(&:failed?)
       def passed  = results.select(&:passed?)
       def skipped = results.select(&:skipped?)

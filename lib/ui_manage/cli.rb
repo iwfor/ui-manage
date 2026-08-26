@@ -23,18 +23,19 @@ module UiManage
     end
 
     # Groups commands into three tiers, separated by blank lines: control
-    # commands (`help`, `login`, `use-device`, `remove-device`), then
-    # `report`, then the individual read commands alphabetically.
+    # commands (`help`, `login`, `use-device`, `remove-device`), then the
+    # whole-network commands (`audit`, `report`), then the individual read
+    # commands alphabetically.
     def self.sort_commands!(list)
       control = %w[help login use-device remove-device]
-      report  = %w[report]
+      report  = %w[audit report]
 
       list.sort_by! do |item|
         name = item[0].to_s.split(/\s+/)[1].to_s
         if (idx = control.index(name))
           [0, idx]
-        elsif report.include?(name)
-          [1, 0]
+        elsif (idx = report.index(name))
+          [1, idx]
         else
           [2, name]
         end
@@ -43,7 +44,7 @@ module UiManage
       control_idx = list.rindex { |item| control.include?(item[0].to_s.split(/\s+/)[1]) }
       list.insert(control_idx + 1, ['', '']) if control_idx
 
-      report_idx = list.index { |item| report.include?(item[0].to_s.split(/\s+/)[1]) }
+      report_idx = list.rindex { |item| report.include?(item[0].to_s.split(/\s+/)[1]) }
       list.insert(report_idx + 1, ['', '']) if report_idx
     end
 
@@ -271,6 +272,114 @@ module UiManage
       puts Completions.generate(shell, prog: File.basename($PROGRAM_NAME), commands: commands)
     rescue ArgumentError => e
       abort e.message
+    end
+
+    # -------------------------------------------------------------------------
+    # Audit
+    # -------------------------------------------------------------------------
+
+    desc 'audit [CATEGORY]', 'Run a health and security audit of the network'
+    long_desc <<~DESC
+      Runs every audit check against a device and reports what it finds.
+      CATEGORY narrows the run to "security" or "health"; omit it for both.
+
+      Each check reports one of four outcomes, and the difference between the
+      last two matters:
+
+        pass     the check ran and found nothing
+
+        fail     the check found something, reported as one or more findings
+
+        skipped  the check could not run — the controller or this credential
+                 would not provide the data it needs. This is NOT a pass, and
+                 is listed separately so it cannot be read as one.
+
+        errored  the check itself failed. The run continues, and the exit
+                 status is 2.
+
+      Findings are ranked info, low, medium, high, critical. --severity reports
+      only at or above a level; --fail-on sets the exit status from one, which
+      is what makes this usable from cron or CI:
+
+        0  nothing at or above the threshold
+        1  findings at or above it
+        2  a check errored, so the run is incomplete
+
+      --format renders as a table (default), json, markdown, or a self-contained
+      html page. --output writes to a file instead of stdout.
+
+      --check and --skip take check ids or globs:
+
+        ui-manage audit --check 'wlan_*'
+
+        ui-manage audit --skip firewall_unused_group port_duplex
+
+      --baseline compares against a saved run and reports only what is new,
+      along with anything that has since been fixed. This is what makes the
+      audit worth running on a schedule:
+
+        ui-manage audit --save-baseline ~/net-baseline.json
+
+        ui-manage audit --baseline ~/net-baseline.json --fail-on high
+
+      --list-checks prints the catalogue and --explain describes one check;
+      neither needs a controller connection.
+
+      Thresholds and suppressions live in ~/.config/ui-manage/audit.toml.
+    DESC
+    output_options anon: 'Replace IP addresses, MAC addresses, SSIDs, and identifiers with friendly placeholders'
+    option :severity,      type: :string,  desc: 'Only report findings at or above this severity (info, low, medium, high, critical)'
+    option :fail_on,       type: :string,  desc: 'Exit 1 when findings at or above this severity are present'
+    option :format,        aliases: '-f', type: :string, default: 'table', desc: 'Output format: table, json, markdown, or html'
+    option :check,         type: :array,   desc: 'Only run these checks (ids or globs)'
+    option :skip,          type: :array,   desc: 'Do not run these checks (ids or globs)'
+    option :list_checks,   type: :boolean, default: false, desc: 'List every available check and exit'
+    option :explain,       type: :string,  desc: 'Describe one check by id and exit'
+    option :summary,       type: :boolean, default: false, desc: 'Print counts only, without individual findings'
+    option :all,           type: :boolean, default: false, desc: 'Include checks that passed'
+    option :remediate,     type: :boolean, default: false, desc: 'Include how to fix each finding'
+    option :output,        aliases: '-o', type: :string, desc: 'Write to this file instead of stdout'
+    option :baseline,      type: :string,  desc: 'Compare against a saved baseline and report only what is new'
+    option :save_baseline, type: :string,  desc: 'Write the current findings to a baseline file'
+    option :sort,          aliases: '-s', type: :string, desc: 'Ignored; findings are always ordered by severity'
+    def audit(category = nil)
+      return list_checks if options[:list_checks]
+      return explain_check(options[:explain]) if options[:explain]
+
+      category = validated_category(category)
+      format   = validated_format
+      minimum  = validated_severity(options[:severity], '--severity')
+      fail_on  = validated_severity(options[:fail_on], '--fail-on')
+
+      settings = audit_settings
+      checks   = Audit::Registry.select(only: options[:check], skip: options[:skip],
+                                        category: category, settings: settings)
+      abort 'No checks match those filters. Run `ui-manage audit --list-checks` to see the ids.' if checks.empty?
+
+      report   = run_audit(checks, settings)
+      resolved = []
+
+      if (path = options[:baseline])
+        baseline = load_baseline(path)
+        resolved = baseline.resolved(report.findings)
+        report   = report.only { |finding| !baseline.keys.include?(finding.key) }
+      end
+
+      save_baseline(report) if options[:save_baseline]
+
+      emit(Audit::Renderer.render(
+        report,
+        format:       format,
+        min_severity: minimum,
+        show_passing: options[:all],
+        summary_only: options[:summary],
+        remediate:    options[:remediate],
+        anon:         Anonymizer.new(options[:anon]),
+        colour:       format == 'table' && options[:output].nil? && $stdout.tty?,
+        resolved:     resolved
+      ))
+
+      exit(report.exit_status(fail_on: fail_on))
     end
 
     # -------------------------------------------------------------------------
@@ -707,6 +816,10 @@ module UiManage
       configuration, and alarms and threats already carry what is actionable.
       Windowed sections cover the last 24 hours.
 
+      The report opens with an audit summary. Run `ui-manage audit` for the
+      findings themselves, and `ui-manage audit --list-checks` for what it
+      looks at.
+
       Sections backed by an endpoint this controller or credential cannot
       read say so and the report continues.
 
@@ -722,6 +835,9 @@ module UiManage
     def report
       anon   = Anonymizer.new(options[:anon])
       client = resolve_client
+
+      report_header('Audit Summary')
+      show_audit_summary(client: client, anon: anon)
 
       report_header('Identity')
       show_identity(client: client, anon: anon)
@@ -853,16 +969,144 @@ module UiManage
       yes?('Remote access expected? [y/N]')
     end
 
-    def resolve_client
-      config = Config.new
+    # The configured device entry. The audit needs it as well as the client,
+    # since the recorded policy lives here, so it is resolved once and shared.
+    # The audit's headline figures, at the top of a report. The findings
+    # themselves belong to `ui-manage audit`, which can rank, filter, and
+    # format them; repeating them here would just make the report longer.
+    def show_audit_summary(client: nil, anon: Anonymizer.new(false))
+      report = run_audit(Audit::Registry.select(settings: audit_settings), audit_settings,
+                         client: client)
+
+      counts = report.counts
+      Formatter.kv(
+        [['Checks run',    report.results.size],
+         ['Passed',        report.passed.size],
+         ['With findings', report.failed.size],
+         ['Not checked',   report.skipped.size],
+         ['Errored',       report.errored.size],
+         ['Findings',      counts.empty? ? 'none' : counts.map { |s, n| "#{n} #{s}" }.join(', ')]]
+      )
+      say ''
+      say 'Run `ui-manage audit` for the findings themselves.'
+    end
+
+    # Runs the selected checks. The client is shared with the rest of the CLI,
+    # so a report that already fetched an endpoint does not fetch it again.
+    def run_audit(checks, settings, client: nil)
+      context = Audit::Context.new(
+        client:   client || resolve_client,
+        device:   resolve_device,
+        settings: settings
+      )
+      Audit::Runner.new(context: context, checks: checks).run
+    rescue Client::AuthError => e
+      abort "Authentication error: #{e.message}"
+    rescue Client::ApiError => e
+      abort "API error: #{e.message}"
+    end
+
+    def audit_settings
+      Audit::Settings.new
+    rescue ArgumentError => e
+      abort e.message
+    end
+
+    def load_baseline(path)
+      Audit::Baseline.load(path)
+    rescue ArgumentError => e
+      abort e.message
+    end
+
+    def save_baseline(report)
+      path = Audit::Baseline.from_report(report).save(options[:save_baseline])
+      warn "Baseline written to #{path}"
+    rescue SystemCallError => e
+      abort "Could not write baseline: #{e.message}"
+    end
+
+    def emit(text)
+      return puts(text) if options[:output].nil?
+
+      File.write(options[:output], text)
+      say "Wrote #{options[:output]}"
+    rescue SystemCallError => e
+      abort "Could not write #{options[:output]}: #{e.message}"
+    end
+
+    def list_checks
+      rows = Audit::Registry.all.map do |check|
+        [check.id, check.category, check.severity, check.requires.join(', '), check.title]
+      end
+
+      Formatter.table(
+        %w[Check Category Severity Requires Title],
+        rows,
+        title: "Audit checks (#{rows.size})",
+        sort:  options[:sort]
+      )
+    end
+
+    def explain_check(id)
+      check = Audit::Registry.find(id)
+      unless check
+        abort "No check named #{id.inspect}. Run `ui-manage audit --list-checks` to see the ids."
+      end
+
+      Formatter.kv(
+        [['Check', check.id], ['Title', check.title], ['Category', check.category],
+         ['Severity', check.severity],
+         ['Needs', check.requires.empty? ? 'nothing' : check.requires.join(', ')],
+         ['Fix', check.remediation || '—']],
+        title: "#{check.id}\n"
+      )
+      return if check.requires.empty?
+
+      say ''
+      say 'If the controller or this credential will not provide what it needs,'
+      say 'this check is reported as not-checked rather than as a pass.'
+    end
+
+    def validated_category(category)
+      return nil if category.nil?
+
+      known = Audit::Registry.categories.map(&:to_s)
+      return category if known.include?(category)
+
+      raise Thor::Error, "ERROR: unknown category #{category.inspect} — use #{known.join(' or ')}."
+    end
+
+    def validated_format
+      format = options[:json] ? 'json' : options[:format].to_s
+      return format if Audit::Renderer::FORMATS.include?(format)
+
+      raise Thor::Error, "ERROR: unknown format #{format.inspect} — use #{Audit::Renderer::FORMATS.join(', ')}."
+    end
+
+    def validated_severity(value, flag)
+      return nil if value.nil?
+      return Audit::Severity.normalize(value) if Audit::Severity.valid?(value)
+
+      raise Thor::Error, "ERROR: unknown severity #{value.inspect} for #{flag} — " \
+                         "use #{Audit::Severity::ORDER.join(', ')}."
+    end
+
+    def resolve_device
+      return @resolved_device if defined?(@resolved_device)
 
       dev = begin
-        config.device(options[:device])
+        Config.new.device(options[:device])
       rescue => e
         abort e.message
       end
 
       abort 'No devices configured. Run `ui-manage login HOST` to add one.' if dev.nil?
+
+      @resolved_device = dev
+    end
+
+    def resolve_client
+      dev = resolve_device
 
       creds =
         if dev['encrypted_api_key']

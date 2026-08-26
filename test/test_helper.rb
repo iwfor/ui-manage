@@ -40,28 +40,71 @@ module UiManage
       end
     end
 
-    # Runs a CLI command against a stubbed controller and returns what it
-    # printed. Options are the command's own flags.
     # A braceless trailing hash is captured as keywords under Ruby 3, and
-    # keywords may have String keys — so `render(:wlans, 'wlanconf' => [...])`
-    # would otherwise arrive as an option rather than a route, or as an
-    # "unknown keyword" error. Endpoint routes are the String-keyed entries;
-    # flags and settings are the Symbol-keyed ones.
+    # keywords may have String keys — so `render(:wlans, 'wlanconf' => [...])` would
+    # otherwise arrive as an option rather than a route, or as an "unknown
+    # keyword" error. Endpoint routes are the String-keyed entries; flags and
+    # settings are the Symbol-keyed ones.
     def split_routes(routes, options)
       [routes.merge(options.select { |k, _| k.is_a?(String) }),
        options.reject { |k, _| k.is_a?(String) }]
     end
 
-    def render(command, routes = {}, **options)
-      routes, options = split_routes(routes, options)
-
+    # Builds a CLI instance wired to a stubbed controller.
+    def cli_for(command, routes, options)
+      device    = options.delete(:device_config) || {}
       transport = stub_transport(routes)
       client    = Client.new(host: 'unifi.test', api_key: 'test-key', transport: transport)
-      shell     = CLI.new([], Thor::CoreExt::HashWithIndifferentAccess.new(options))
+      shell     = CLI.new([], Thor::CoreExt::HashWithIndifferentAccess.new(
+        option_defaults(command).merge(options)
+      ))
       shell.define_singleton_method(:resolve_client) { client }
+      # Views that reach the audit need the device entry too, for its policy.
+      shell.define_singleton_method(:resolve_device) { device }
+      shell
+    end
 
-      out, = capture_io { shell.public_send(command) }
+    # Thor applies option defaults while parsing argv. Constructing a command
+    # directly skips that, so a test would see nil where a real invocation sees
+    # the declared default — applied here so the two behave the same.
+    def option_defaults(command)
+      declared = CLI.commands[command.to_s]&.options || {}
+      declared.merge(CLI.class_options)
+              .filter_map { |name, option| [name, option.default] unless option.default.nil? }
+              .to_h
+    end
+
+    # Invokes a command without capturing its output, so a caller can wrap it
+    # in its own capture — assert_aborts does, and nesting captures would
+    # swallow the message it is looking for.
+    def invoke(command, routes = {}, args: [], **options)
+      routes, options = split_routes(routes, options)
+      cli_for(command, routes, options).public_send(command, *args)
+    end
+
+    # Runs a CLI command against a stubbed controller and returns what it
+    # printed. Options are the command's own flags; `args:` are its positional
+    # arguments.
+    def render(command, routes = {}, args: [], **options)
+      routes, options = split_routes(routes, options)
+      shell = cli_for(command, routes, options)
+      out, = capture_io { shell.public_send(command, *args) }
       out
+    end
+
+    # Like #render, for commands that exit. Returns [output, exit status].
+    def render_with_status(command, routes = {}, args: [], **options)
+      routes, options = split_routes(routes, options)
+      shell  = cli_for(command, routes, options)
+      status = 0
+      out, = capture_io do
+        begin
+          shell.public_send(command, *args)
+        rescue SystemExit => e
+          status = e.status
+        end
+      end
+      [out, status]
     end
 
     # Runs one audit check against a stubbed controller and returns its Report.
