@@ -148,6 +148,83 @@ reported as skipped rather than passing silently or failing the whole run.
 Core endpoints — devices, clients, networks, firewall rules, port forwards,
 DHCP — are not optional; a failure there is a real error.
 
+## Writing an audit check
+
+The audit engine lives in `lib/ui_manage/audit/`. A check is one file under
+`audit/checks/`; subclassing registers it, so there is no other wiring.
+
+```ruby
+module UiManage
+  module Audit
+    module Checks
+      class GuestIsolation < Check
+        id          :guest_isolation
+        title       'Guest network without client isolation'
+        category    :security          # security or health
+        severity    :high              # info, low, medium, high, critical
+        requires    :networks          # endpoints this check cannot run without
+        remediation 'Settings > Networks > (network) > Advanced: enable isolation.'
+
+        def run
+          data(:networks).each do |net|
+            next unless net['is_guest']
+            next if net['network_isolation_enabled']
+
+            finding(
+              subject:  net['name'],
+              message:  "#{net['name']} is a guest network without client isolation.",
+              evidence: { 'vlan' => net['vlan'] }
+            )
+          end
+        end
+      end
+    end
+  end
+end
+```
+
+What the base class gives you:
+
+- `requires` — the runner skips the check, with the reason the endpoint was
+  refused, when the controller or credential will not serve that data. A
+  check body never has to handle `nil`.
+- `data(:name)` — an endpoint, fetched once per run and shared by every
+  check.
+- `threshold('cpu_percent')` — a tunable value, from `audit.toml` or the
+  built-in default.
+- `policy(:remote_access_expected)` — what the operator said this network is
+  supposed to look like (see `ui-manage policy`).
+- `setting('mgmt')` — one section of the controller's site settings.
+- `finding(...)` — something wrong. `severity:` overrides the check's default
+  for a single finding.
+- `skip!('reason')` — end as "not checked". Use it whenever the data does
+  not say enough to judge; a check must never pass by default.
+
+A run reports four outcomes per check: **pass**, **fail**, **skip**, and
+**error**. These are kept apart deliberately — a skip means the data was
+unavailable, an error means the check has a bug, and reporting either as a
+pass would let "not checked" read as "fine".
+
+### Tuning
+
+Thresholds and suppressions live in `~/.config/ui-manage/audit.toml`:
+
+```toml
+[thresholds]
+cpu_percent = 80
+min_passphrase_chars = 12
+
+[suppress]
+# Whole checks to stop running.
+checks = ["wlan_hidden_ssid"]
+# Individual findings, as "check_id" or "check_id:subject".
+findings = ["port_forward_sensitive:Plex"]
+```
+
+Suppression exists so a finding the operator has considered and accepted
+stops reappearing — a recurring known-good finding trains people to ignore
+the whole report.
+
 ## Development
 
 ```

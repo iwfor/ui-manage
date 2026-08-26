@@ -10,35 +10,11 @@ module UiManage
     # Bands as UniFi names them on a radio.
     RADIO_BANDS = { 'ng' => '2.4 GHz', 'na' => '5 GHz', '6e' => '6 GHz', 'ax' => '6 GHz' }.freeze
 
-    # WLAN security, worst first, as it should read in a table.
-    def wlan_security_label(wlan)
-      case wlan['security'].to_s.downcase
-      when 'open', '' then 'OPEN'
-      when 'wep'      then 'WEP'
-      when 'wpaeap'   then "#{wpa_generation(wlan)}-Enterprise"
-      else                 "#{wpa_generation(wlan)}-PSK"
-      end
-    end
+    # Classification lives in WlanSecurity so the audit checks and this view
+    # cannot drift apart about what counts as insecure.
+    def wlan_security_label(wlan) = WlanSecurity.label(wlan)
 
-    def wpa_generation(wlan)
-      return 'WPA3' if wlan['wpa3_support'] || wlan['wpa3_enhanced_192']
-      return 'WPA3/WPA2' if wlan['wpa3_transition']
-
-      case wlan['wpa_mode'].to_s.downcase
-      when 'wpa1', 'wpa' then 'WPA1'
-      when 'wpa3'        then 'WPA3'
-      else                    'WPA2'
-      end
-    end
-
-    # A WLAN is called insecure when it offers no encryption, or encryption
-    # long since broken, or a handshake with a known offline attack.
-    def insecure_wlan?(wlan)
-      security = wlan_security_label(wlan)
-      security.start_with?('OPEN', 'WEP', 'WPA1') ||
-        wlan['wpa_enc'].to_s.casecmp?('tkip') ||
-        !!wlan['wps']
-    end
+    def insecure_wlan?(wlan) = WlanSecurity.insecure?(wlan)
 
     def show_wlans(client: nil, anon: Anonymizer.new(false))
       client ||= resolve_client
@@ -559,7 +535,7 @@ module UiManage
           d['version'] || '-',
           d['upgrade_to_firmware'] || '-',
           d['upgradable'] ? 'YES' : 'no',
-          d['state'] == 1 ? 'connected' : device_state_label(d)
+          device_state_label(d)
         ]
       end
 
@@ -571,17 +547,8 @@ module UiManage
       )
     end
 
-    # UniFi reports device state as an integer; only the common ones are named
-    # here, and anything else falls through as its raw value.
-    DEVICE_STATES = {
-      0 => 'disconnected', 1 => 'connected', 2 => 'pending adoption',
-      4 => 'updating', 5 => 'provisioning', 6 => 'unreachable',
-      7 => 'adopting', 9 => 'adoption failed', 11 => 'isolated'
-    }.freeze
-
-    def device_state_label(device)
-      DEVICE_STATES[device['state'].to_i] || device['state'].to_s
-    end
+    # Naming lives in DeviceState so the audit checks agree with this view.
+    def device_state_label(device) = DeviceState.label(device)
 
     def show_wifi_experience(client: nil, anon: Anonymizer.new(false))
       sta = with_client(client) { |c| c.clients }.reject { |c| c['is_wired'] }

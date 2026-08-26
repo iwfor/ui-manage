@@ -42,13 +42,18 @@ module UiManage
 
     # Runs a CLI command against a stubbed controller and returns what it
     # printed. Options are the command's own flags.
+    # A braceless trailing hash is captured as keywords under Ruby 3, and
+    # keywords may have String keys — so `render(:wlans, 'wlanconf' => [...])`
+    # would otherwise arrive as an option rather than a route, or as an
+    # "unknown keyword" error. Endpoint routes are the String-keyed entries;
+    # flags and settings are the Symbol-keyed ones.
+    def split_routes(routes, options)
+      [routes.merge(options.select { |k, _| k.is_a?(String) }),
+       options.reject { |k, _| k.is_a?(String) }]
+    end
+
     def render(command, routes = {}, **options)
-      # A braceless trailing hash is captured as keywords under Ruby 3, and
-      # keywords may have String keys — so `render(:wlans, 'wlanconf' => [...])`
-      # would silently arrive as an option rather than a route. Endpoint routes
-      # are the String-keyed ones; command flags are the Symbol-keyed ones.
-      routes  = routes.merge(options.select { |k, _| k.is_a?(String) })
-      options = options.reject { |k, _| k.is_a?(String) }
+      routes, options = split_routes(routes, options)
 
       transport = stub_transport(routes)
       client    = Client.new(host: 'unifi.test', api_key: 'test-key', transport: transport)

@@ -92,24 +92,48 @@ Still worth doing before Phase 4 leans on this data:
 - [ ] `settings` output is long; a `--section` default or a summary view may
       be wanted once the audit consumes it
 
-## Phase 3 — Check engine (`lib/ui_manage/audit/`)
+## Phase 3 — Check engine  ✅ done
 
-- [ ] `Audit::Check` — id, title, category, severity, `#run(context)`,
-      remediation text
-- [ ] `Audit::Finding` — check id, severity, subject, message, evidence,
-      remediation
-- [ ] `Audit::Context` — lazily fetches and caches every endpoint, shared
-      across checks; carries `client.degradations`
-- [ ] `Audit::Registry` — auto-loads `checks/*.rb`, filterable by id/category/
-      severity
-- [ ] Three result states, not two: pass / fail / **skipped** (endpoint
-      unavailable) — wired to Phase 1's degradation reporting
-- [ ] Severity ladder: critical / high / medium / low / info
-- [ ] Thresholds in `~/.config/ui-manage/audit.toml` with built-in defaults
-      (CPU %, memory %, temp, RSSI floor, PSK min length, sensitive ports)
-- [ ] Suppression list so accepted risks stop reappearing
+- [x] `Audit::Check` — declarative id/title/category/severity/requires/
+      remediation, `#run`, `finding(...)`, `skip!(reason)`
+- [x] `Audit::Finding` — check id, severity, subject, message, evidence,
+      remediation; `key` for suppression
+- [x] `Audit::Context` — fetches each endpoint once per run, shared across
+      checks; carries degradation reasons, thresholds, and device policy
+- [x] `Audit::Registry` — subclasses self-register, filterable by id (glob),
+      category, severity, and suppression
+- [x] `Audit::Runner` + `Audit::Report` — runs checks, applies suppression,
+      summarises, and computes an exit status
+- [x] `Audit::Settings` — thresholds and suppressions from
+      `~/.config/ui-manage/audit.toml`, with built-in defaults
+- [x] `Audit::Severity` — info/low/medium/high/critical with ordering
+- [x] Four result states, not three: pass / fail / **skip** / **error**
+- [x] Five reference checks proving the mechanics end to end
+- [x] Shared `WlanSecurity` and `DeviceState` modules so checks and views
+      cannot disagree
+- [x] 71 new tests
 
----
+Decisions taken along the way:
+- Four result states rather than three. A skip (data unavailable, expected)
+  and an error (the check has a bug) are different facts, and conflating
+  either with a pass would let "not checked" read as "fine". A check that
+  raises is caught, recorded, and the run continues.
+- `requires` on a check is what connects Phase 1's degradation tracking to
+  the engine: the runner skips the check with the recorded reason, so no
+  check body ever handles a nil endpoint.
+- `skip!` exists for the other case — the endpoint answered, but the data
+  does not say enough to judge (a setting the controller does not report).
+- An errored check forces exit status 2 regardless of `--fail-on`: a run
+  that could not complete must not report success.
+- Suppression is by `check_id` or `check_id:subject`, so one accepted
+  finding can be silenced without disabling the whole check.
+
+Reference checks shipped (the rest come in Phases 4 and 5):
+`wlan_encryption`, `wlan_passphrase`, `remote_access`, `device_offline`,
+`device_cpu`.
+
+**Not yet reachable from the CLI** — the `audit` command is Phase 6. The
+engine is exercised through tests until then.
 
 ## Phase 4 — Security checks
 
