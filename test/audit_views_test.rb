@@ -82,6 +82,26 @@ module UiManage
       assert_includes out, 'IoT (VLAN 30)'
     end
 
+    # --- anonymisation ------------------------------------------------------
+
+    # These names have no recognisable shape, so scanning text cannot catch
+    # them; they have to be replaced where the field is read.
+    def test_anon_replaces_ssids_device_names_and_admin_identities
+      assert_includes render(:wlans, { WLAN_PATH => [wlan('name' => 'SmithFamily')] }, anon: true), 'Network-1'
+      refute_includes render(:wlans, { WLAN_PATH => [wlan('name' => 'SmithFamily')] }, anon: true), 'SmithFamily'
+
+      admins = render(:admins, { 'sitemgr' => [{ 'name' => 'alice', 'email' => 'alice@corp.test' }] }, anon: true)
+      refute_includes admins, 'alice'
+      refute_includes admins, 'alice@corp.test'
+
+      firmware = render(:firmware, { 'stat/device' => [{ 'name' => 'AP-Garage' }] }, anon: true)
+      refute_includes firmware, 'AP-Garage'
+    end
+
+    def test_without_anon_the_real_names_are_shown
+      assert_includes render(:wlans, WLAN_PATH => [wlan('name' => 'SmithFamily')]), 'SmithFamily'
+    end
+
     # --- degradation ----------------------------------------------------------
 
     def test_a_refused_endpoint_says_why_instead_of_aborting

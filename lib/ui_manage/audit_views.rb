@@ -33,7 +33,7 @@ module UiManage
 
       rows = wlans.map do |w|
         [
-          anon.enabled? ? anon.scrub(w['name']) : w['name'],
+          anon.ssid(w['name']),
           Formatter.enabled_badge(w['enabled']),
           wlan_security_label(w),
           (w['wpa_enc'] || '-').to_s.upcase,
@@ -285,8 +285,8 @@ module UiManage
 
       rows = admins.map do |a|
         [
-          anon.enabled? ? anon.scrub(a['name']) : a['name'],
-          anon.enabled? ? 'redacted@example.com' : (a['email'] || '-'),
+          anon.person(AdminAccount.name(a)),
+          anon.email(a['email']) || '-',
           a['role'] || (a['is_super'] ? 'super' : '-'),
           a['is_super'] ? 'YES' : 'no',
           two_factor_label(a),
@@ -327,7 +327,7 @@ module UiManage
       rows = rogues.map do |r|
         essid = r['essid'].to_s
         [
-          anon.enabled? ? anon.scrub(essid) : (essid.empty? ? '(hidden)' : essid),
+          essid.empty? ? '(hidden)' : anon.ssid(essid),
           anon.mac(r['bssid']),
           r['channel'] || '-',
           RADIO_BANDS[r['radio'].to_s] || r['band'] || '-',
@@ -493,7 +493,7 @@ module UiManage
       rows = entries.map do |d|
         [
           d['service'] || '-',
-          anon.enabled? ? anon.scrub(d['host_name'].to_s) : (d['host_name'] || '-'),
+          anon.label(d['host_name']) || '-',
           d['interface'] || '-',
           d['login'].to_s.empty? ? '-' : 'set',
           d['x_password'].to_s.empty? ? 'not set' : 'set'
@@ -521,7 +521,7 @@ module UiManage
 
       rows = devs.map do |d|
         [
-          anon.enabled? ? anon.scrub(d['name'].to_s) : (d['name'] || d['model']),
+          anon.device_name(d['name'] || d['model']),
           d['model'] || '-',
           d['version'] || '-',
           d['upgrade_to_firmware'] || '-',
@@ -557,8 +557,8 @@ module UiManage
 
       rows = sta.sort_by { |c| c['signal'].to_i }.map do |c|
         [
-          anon.enabled? ? anon.scrub(c['name'] || c['hostname'] || '—') : (c['name'] || c['hostname'] || '—'),
-          anon.enabled? ? anon.scrub(c['essid'].to_s) : (c['essid'] || '-'),
+          anon.device_name(c['name'] || c['hostname']) || '—',
+          anon.ssid(c['essid']) || '-',
           RADIO_BANDS[c['radio'].to_s] || c['radio'] || '-',
           c['channel'] || '-',
           c['signal'] ? "#{c['signal']} dBm" : '-',
@@ -616,7 +616,7 @@ module UiManage
 
       rows = rows_data.map do |d, p|
         [
-          anon.enabled? ? anon.scrub(d['name'].to_s) : (d['name'] || d['model']),
+          anon.device_name(d['name'] || d['model']),
           p['port_idx'],
           p['name'] || '-',
           p['up'] ? 'up' : 'down',

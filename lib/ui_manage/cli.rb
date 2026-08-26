@@ -52,6 +52,8 @@ module UiManage
 
     class_option :verbose, aliases: '-v', type: :boolean, default: false,
                             desc: 'Print the curl commands being executed (API keys, tokens, and request bodies are redacted)'
+    class_option :timeout, type: :numeric, default: CurlTransport::DEFAULT_TIMEOUT,
+                            desc: 'Seconds to wait for each controller request. An audit reads many endpoints, so the worst case is this times the number of them'
 
     # Declares the option trio shared by the information commands: --device,
     # --json, and — when a description is given — --anon/--anonymous.
@@ -123,8 +125,8 @@ module UiManage
     def login(host)
       name        = options[:name] || host
       config      = Config.new
-      client_args = { host: host, site: options[:site],
-                      verify_ssl: options[:verify_ssl], verbose: options[:verbose] }
+      client_args = { host: host, site: options[:site], verify_ssl: options[:verify_ssl],
+                      verbose: options[:verbose], timeout: options[:timeout] }
 
       creds =
         if options[:api_key]
@@ -269,7 +271,8 @@ module UiManage
         [name.tr('_', '-'), flags]
       end
 
-      puts Completions.generate(shell, prog: File.basename($PROGRAM_NAME), commands: commands)
+      puts Completions.generate(shell, prog: File.basename($PROGRAM_NAME),
+                                       commands: commands, values: completion_values)
     rescue ArgumentError => e
       abort e.message
     end
@@ -938,6 +941,20 @@ module UiManage
       key
     end
 
+    # Flags whose values come from a known set. Read from the registry and the
+    # renderer rather than listed here, so adding a check or a format updates
+    # the completions with it.
+    def completion_values
+      {
+        '--check'    => Audit::Registry.all.map(&:id),
+        '--skip'     => Audit::Registry.all.map(&:id),
+        '--severity' => Audit::Severity::ORDER,
+        '--fail-on'  => Audit::Severity::ORDER,
+        '--explain'  => Audit::Registry.all.map(&:id),
+        '--format'   => Audit::Renderer::FORMATS
+      }
+    end
+
     # How an unset/true/false policy value reads in output. Unset is a real
     # third state: the audit reports the controller's setting but does not
     # call it right or wrong.
@@ -1120,6 +1137,7 @@ module UiManage
         site:       dev['site'] || 'default',
         verify_ssl: !!dev['verify_ssl'],
         verbose:    options[:verbose],
+        timeout:    options[:timeout],
         **creds
       )
     rescue ArgumentError, OpenSSL::OpenSSLError => e
@@ -1647,7 +1665,7 @@ module UiManage
           end
 
         [
-          c['name'] || c['hostname'] || '—',
+          anon.device_name(c['name'] || c['hostname']) || '—',
           anon.ip(c['ip']) || '—',
           anon.mac(c['mac']),
           wired ? 'wired' : 'wireless',

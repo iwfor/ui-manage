@@ -42,7 +42,16 @@ module UiManage
 
       attr_reader :anon, :resolved
 
-      def findings = @findings ||= report.findings(min_severity: @min_severity)
+      def findings
+        @findings ||= begin
+          list = report.findings(min_severity: @min_severity)
+          # Every subject is registered before any message is scrubbed, so a
+          # message naming an SSID or a device is anonymised to the same
+          # placeholder as the column that names it.
+          list.each { |finding| anon.label(finding.subject) }
+          list
+        end
+      end
 
       def summary_only? = @summary_only
 
@@ -69,7 +78,7 @@ module UiManage
       # go through the anonymizer when one is active.
       def scrub(text) = anon.scrub(text.to_s)
 
-      def subject_of(finding) = finding.subject.nil? ? '' : scrub(finding.subject)
+      def subject_of(finding) = finding.subject.nil? ? '' : anon.label(finding.subject).to_s
     end
   end
 end

@@ -81,7 +81,7 @@ module UiManage
     ).freeze
 
     def initialize(host:, site: 'default', verify_ssl: false, username: nil, password: nil,
-                   api_key: nil, verbose: false, transport: nil)
+                   api_key: nil, verbose: false, timeout: nil, transport: nil)
       raise ArgumentError, 'Provide either api_key or username+password' if api_key.nil? && (username.nil? || password.nil?)
 
       @host         = host
@@ -93,7 +93,9 @@ module UiManage
       @csrf_token   = nil
       @cache        = {}
       @degradations = {}
-      @transport    = transport || CurlTransport.new(verify_ssl: verify_ssl, verbose: verbose)
+      @transport    = transport ||
+                      CurlTransport.new(verify_ssl: verify_ssl, verbose: verbose,
+                                        timeout: timeout || CurlTransport::DEFAULT_TIMEOUT)
     end
 
     NETWORK_ENDPOINTS.each do |name, path|
