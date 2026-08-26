@@ -40,7 +40,7 @@ degrades rather than breaks.
 
 ---
 
-## Phase 2 — New read commands  🔄 in progress
+## Phase 2 — New read commands  ✅ done
 
 Each follows the existing pattern: `desc` + `output_options` + `--sort`, with
 a `show_*` helper reused by `report`. All of them read optional endpoints, so
@@ -48,25 +48,25 @@ all of them degrade with a printed reason rather than aborting.
 
 - [x] `Redactor` — strip `x_`-prefixed and plainly-named secrets at the render
       boundary; wired into `Formatter.json` so no caller can forget
-- [ ] `wlans` — SSID, band, security, PMF, WPS, guest, VLAN, hidden;
+- [x] `wlans` — SSID, band, security, cipher, PMF, WPS, guest, hidden, VLAN;
       `--insecure-only`
-- [ ] `settings` — flattened site settings; `--section NAME`
-- [ ] `health` — subsystem status
-- [ ] `alarms` — `--within HOURS`, `--archived`
-- [ ] `events` — `--within HOURS`, `--type PATTERN`, `--limit N`
-- [ ] `threats` — IDS/IPS detections; `--within HOURS`, `--severity`
-- [ ] `admins` — accounts, role, super, 2FA
-- [ ] `rogue-aps` — `--within HOURS`, `--min-signal`, flags SSIDs matching ours
-- [ ] `vpn` — VPN servers/peers derived from `networkconf`
-- [ ] `vlans` — subnet, VLAN ID, purpose, isolation, DHCP
-- [ ] `routes` — static routes + dynamic DNS
-- [ ] `firmware` — current vs available version per device
-- [ ] `wifi-experience` — RSSI, SNR, retries, satisfaction; `--signal-below`
-- [ ] `port-errors` — RX/TX errors, drops, per port; `--all`
-- [ ] Extend `clients` with `--unknown`, `--guest`, `--vlan N`, `--since HOURS`
-- [ ] Fold the new sections into `report`
-- [ ] Tests for every new view
-- [ ] README
+- [x] `settings` — flattened site settings; `--section NAME`
+- [x] `health` — subsystem status
+- [x] `alarms` — `--within HOURS`, `--archived`
+- [x] `events` — `--within HOURS`, `--type PATTERN`, `--limit N`
+- [x] `threats` — IDS/IPS detections; `--within HOURS`, `--severity`
+- [x] `admins` — accounts, role, super, 2FA
+- [x] `rogue-aps` — `--within HOURS`, `--min-signal`, flags SSIDs matching ours
+- [x] `vpn` — VPN servers/peers derived from `networkconf`
+- [x] `vlans` — subnet, VLAN ID, purpose, isolation, DHCP; `--all`
+- [x] `routes` — static routes + dynamic DNS
+- [x] `firmware` — current vs available version per device; `--outdated`
+- [x] `wifi-experience` — RSSI, SNR, retries, satisfaction; `--signal-below`
+- [x] `port-errors` — RX/TX errors, drops, duplex faults; `--all`
+- [x] Extend `clients` with `--unknown`, `--guest`, `--vlan N`, `--since HOURS`
+- [x] Fold the new sections into `report` (events excluded — raw log)
+- [x] Tests for every new view, plus report integration tests
+- [x] README
 
 Decisions taken along the way:
 - `port-errors` is its own command rather than a `--errors` flag on `ports`,
@@ -74,9 +74,23 @@ Decisions taken along the way:
 - `--unknown` on `clients` means "no user-assigned name" — `/rest/user` lists
   every client ever seen, so absence from it is almost never the signal.
 - Alarms have no severity field on the controller, so `alarms --severity` was
-  dropped; `threats --severity` uses `inner_alert_severity`.
+  dropped; `threats --severity` uses `inner_alert_severity` (Suricata numbers
+  1 as most severe, so the rank is inverted for filtering).
+- Views live in `lib/ui_manage/audit_views.rb` rather than growing `cli.rb`;
+  `cli.rb` keeps only the Thor command definitions.
+- `window_hours` / `record_limit` exist because `report` runs the views
+  outside their own commands, where `options[:within]` is not in scope.
+- Secret redaction sits in `Formatter.json` rather than each caller, so a
+  new command cannot forget it. `--anon` was extended to SSIDs, device
+  names, and admin identities.
+- Impersonation detection on `rogue-aps` reports `?` rather than `no` when
+  the WLAN list cannot be read — "unanswerable" must not read as "checked".
 
----
+Still worth doing before Phase 4 leans on this data:
+- [ ] Verify `/cmd/sitemgr`, `/rest/dpiapp`, `/stat/ips/event`, and the 2FA
+      field name against the real controller
+- [ ] `settings` output is long; a `--section` default or a summary view may
+      be wanted once the audit consumes it
 
 ## Phase 3 — Check engine (`lib/ui_manage/audit/`)
 

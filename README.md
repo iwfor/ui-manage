@@ -66,6 +66,18 @@ Run `bin/ui-manage help` for the full command list, or
 | `firewall` | Firewall rules |
 | `port-forwards` | Port forwarding rules |
 | `dhcp` | DHCP network configuration, leases, and reservations |
+| `vlans` | Networks and VLANs with their segmentation settings |
+| `vpn` | VPN servers and site-to-site tunnels |
+| `routes` | Static routes and dynamic DNS entries |
+| `wlans` | Wireless networks and their security settings; `--insecure-only` |
+| `wifi-experience` | Per-client signal, SNR, retries, and satisfaction |
+| `rogue-aps` | Neighbouring access points, flagging any using your SSIDs |
+| `firmware` | Firmware versions and available updates |
+| `port-errors` | Ports reporting errors, drops, or a duplex fault |
+| `health` | Controller subsystem health |
+| `settings` | Site settings; `--section NAME` |
+| `admins` | Site administrators, roles, and 2FA state |
+| `alarms` / `events` / `threats` | Outstanding alarms, the event log, and IDS/IPS detections |
 
 Most information commands support `--json` for raw output and
 `--anon`/`--anonymous` to replace MAC addresses, IP addresses, and other
@@ -89,6 +101,23 @@ Pass `-v/--verbose` on any command to print the curl commands being executed
 echo 'eval "$(bin/ui-manage completions bash)"' >> ~/.bashrc
 echo 'eval "$(bin/ui-manage completions zsh)"'  >> ~/.zshrc
 ```
+
+## Sharing output safely
+
+Passwords, passphrases, pre-shared keys, RADIUS secrets, and SNMP
+communities are replaced with a placeholder in every form of output —
+tables and `--json` alike. `wlans` reports only whether a passphrase is set
+and how long it is, which is what an audit needs; `--anon` drops the length
+too.
+
+This is not a flag you can turn off. Nothing the tool needs to display
+requires the real value, and audit output tends to end up in tickets and
+chat. Checks that must reason about a secret (passphrase length, say) see
+the raw value internally — redaction happens where output is rendered.
+
+`--anon`/`--anonymous` additionally replaces IP addresses, MAC addresses,
+SSIDs, device names, and serial numbers with realistic-looking
+placeholders.
 
 ## Audit policy
 

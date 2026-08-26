@@ -3,6 +3,8 @@ require 'io/console'
 
 module UiManage
   class CLI < Thor
+    include AuditViews
+
     def self.exit_on_failure? = true
 
     def self.start(args = ARGV, config = {})
@@ -56,6 +58,14 @@ module UiManage
       option :device, aliases: '-d', type: :string,  desc: 'Device name (uses default if omitted)'
       option :json,   aliases: '-j', type: :boolean, desc: 'Output raw JSON', default: false if json
       option :anon,   aliases: ['--anonymous'], type: :boolean, default: false, desc: anon if anon
+    end
+
+    # Declares the options shared by commands reading a time-bounded endpoint.
+    def self.window_options(default: 24, limit: nil)
+      option :within, aliases: '-w', type: :numeric, default: default,
+                      desc: 'How many hours back to look'
+      option :limit,  aliases: '-l', type: :numeric, default: limit,
+                      desc: 'Maximum number of records to request' if limit
     end
 
     # -------------------------------------------------------------------------
@@ -264,6 +274,220 @@ module UiManage
     end
 
     # -------------------------------------------------------------------------
+    # Wireless
+    # -------------------------------------------------------------------------
+
+    desc 'wlans', 'Show wireless networks and their security settings'
+    long_desc <<~DESC
+      Lists every configured SSID with the settings an audit cares about:
+      security mode and cipher, protected management frames, WPS, whether it is
+      a guest network, whether the SSID is hidden, which band it runs on, and
+      which network/VLAN it lands on.
+
+      --insecure-only narrows the list to SSIDs that are open, WEP, WPA1, using
+      TKIP, or have WPS enabled — the ones worth acting on first.
+
+      Passphrases are never printed. The Passphrase column reports only whether
+      one is set and how long it is, and --anon drops the length too.
+    DESC
+    output_options anon: 'Replace SSIDs and identifiers with friendly placeholders'
+    option :insecure_only, type: :boolean, default: false, desc: 'Only show SSIDs with a weak or broken configuration'
+    option :sort, aliases: '-s', type: :string, desc: 'Sort by column name (or a unique fragment of one)'
+    def wlans
+      show_wlans(anon: Anonymizer.new(options[:anon]))
+    end
+
+    desc 'wifi-experience', 'Show per-client wireless signal quality'
+    map 'wifi-experience' => :wifi_experience
+    long_desc <<~DESC
+      Signal, noise, signal-to-noise margin, transmit retry rate, the
+      controller's own satisfaction score, and negotiated rates for every
+      wireless client. Sorted weakest signal first.
+
+      --signal-below narrows to clients weaker than a given dBm figure (signal
+      is negative, so --signal-below -70 shows everything worse than -70 dBm).
+    DESC
+    output_options anon: 'Replace client names, SSIDs, and identifiers with friendly placeholders'
+    option :signal_below, type: :numeric, desc: 'Only show clients whose signal is below this many dBm (e.g. -70)'
+    option :sort, aliases: '-s', type: :string, desc: 'Sort by column name (or a unique fragment of one)'
+    def wifi_experience
+      show_wifi_experience(anon: Anonymizer.new(options[:anon]))
+    end
+
+    desc 'rogue-aps', 'Show neighbouring access points this site does not manage'
+    map 'rogue-aps' => :rogue_aps
+    long_desc <<~DESC
+      Access points seen nearby that are not part of this site. The "Ours?"
+      column flags any that broadcast one of your own SSIDs — an unmanaged AP
+      advertising your network name is the evil-twin case worth investigating.
+      It reads "?" when the WLAN list could not be read to compare against.
+
+      --min-signal filters to APs at or above a signal strength, which is a
+      rough proxy for proximity (e.g. --min-signal -70).
+    DESC
+    output_options anon: 'Replace SSIDs, BSSIDs, and identifiers with friendly placeholders'
+    window_options
+    option :min_signal, type: :numeric, desc: 'Only show APs at or above this signal strength in dBm (e.g. -70)'
+    option :sort, aliases: '-s', type: :string, desc: 'Sort by column name (or a unique fragment of one)'
+    def rogue_aps
+      show_rogue_aps(anon: Anonymizer.new(options[:anon]))
+    end
+
+    # -------------------------------------------------------------------------
+    # Networks
+    # -------------------------------------------------------------------------
+
+    desc 'vlans', 'Show networks and VLANs with their segmentation settings'
+    long_desc <<~DESC
+      Every configured network: VLAN tag, subnet, purpose, whether DHCP is
+      served, whether it is isolated from other networks, and whether it has
+      internet access. WAN networks are excluded unless --all is given.
+    DESC
+    output_options anon: 'Replace subnets and identifiers with friendly placeholders'
+    option :all,  aliases: '-a', type: :boolean, default: false, desc: 'Include WAN networks'
+    option :sort, aliases: '-s', type: :string, desc: 'Sort by column name (or a unique fragment of one)'
+    def vlans
+      show_vlans(anon: Anonymizer.new(options[:anon]))
+    end
+
+    desc 'vpn', 'Show VPN servers and site-to-site tunnels'
+    long_desc <<~DESC
+      VPN networks configured on this site — remote-user servers, site-to-site
+      tunnels, and VPN client connections — with their type, subnet, and how
+      they authenticate.
+
+      The Auth column names the method only. Pre-shared keys, WireGuard private
+      keys, and RADIUS secrets are never printed.
+    DESC
+    output_options anon: 'Replace subnets and identifiers with friendly placeholders'
+    option :sort, aliases: '-s', type: :string, desc: 'Sort by column name (or a unique fragment of one)'
+    def vpn
+      show_vpn(anon: Anonymizer.new(options[:anon]))
+    end
+
+    desc 'routes', 'Show static routes and dynamic DNS entries'
+    output_options anon: 'Replace networks, hostnames, and identifiers with friendly placeholders'
+    option :sort, aliases: '-s', type: :string, desc: 'Sort by column name (or a unique fragment of one)'
+    def routes
+      show_routes(anon: Anonymizer.new(options[:anon]))
+    end
+
+    # -------------------------------------------------------------------------
+    # Devices
+    # -------------------------------------------------------------------------
+
+    desc 'firmware', 'Show firmware versions and available updates'
+    output_options anon: 'Replace device names and identifiers with friendly placeholders'
+    option :outdated, aliases: '-o', type: :boolean, default: false, desc: 'Only show devices with an update available'
+    option :sort, aliases: '-s', type: :string, desc: 'Sort by column name (or a unique fragment of one)'
+    def firmware
+      show_firmware(anon: Anonymizer.new(options[:anon]))
+    end
+
+    desc 'port-errors', 'Show switch ports reporting errors, drops, or a duplex fault'
+    map 'port-errors' => :port_errors
+    long_desc <<~DESC
+      Per-port receive and transmit error and drop counters across every
+      switch and gateway. Only ports with a non-zero counter — or a live link
+      that negotiated half duplex — are listed; pass --all for every port.
+
+      Counters are cumulative since the device last booted, so a small number
+      on a long-running device is not necessarily a fault. What matters is a
+      count that grows between runs.
+    DESC
+    output_options anon: 'Replace device names and identifiers with friendly placeholders'
+    option :all,  aliases: '-a', type: :boolean, default: false, desc: 'Show every port, not just those reporting a fault'
+    option :sort, aliases: '-s', type: :string, desc: 'Sort by column name (or a unique fragment of one)'
+    def port_errors
+      show_port_errors(anon: Anonymizer.new(options[:anon]))
+    end
+
+    # -------------------------------------------------------------------------
+    # Controller state
+    # -------------------------------------------------------------------------
+
+    desc 'health', 'Show controller subsystem health'
+    output_options anon: 'Replace IP addresses with friendly placeholders'
+    option :sort, aliases: '-s', type: :string, desc: 'Sort by column name (or a unique fragment of one)'
+    def health
+      show_health(anon: Anonymizer.new(options[:anon]))
+    end
+
+    desc 'settings', 'Show site settings'
+    long_desc <<~DESC
+      The controller's site settings, flattened to one row per setting.
+
+      --section narrows to sections whose key contains the given text (e.g.
+      --section mgmt, --section ips, --section guest).
+
+      Passwords, pre-shared keys, and other credentials are replaced with a
+      placeholder in both table and JSON output.
+    DESC
+    output_options anon: 'Replace IP addresses, MAC addresses, and identifiers with friendly placeholders'
+    option :section, aliases: '-S', type: :string, desc: 'Only show sections whose key contains this text'
+    option :sort, aliases: '-s', type: :string, desc: 'Sort by column name (or a unique fragment of one)'
+    def settings
+      show_settings(anon: Anonymizer.new(options[:anon]))
+    end
+
+    desc 'admins', 'Show site administrators'
+    long_desc <<~DESC
+      Administrator accounts for this site, with role, super-admin status, and
+      whether two-factor authentication is configured.
+
+      The 2FA column reads "unknown" when the controller does not report it —
+      an audit must not read a missing field as "no 2FA". API keys usually
+      cannot read the admin interface at all, in which case this command says
+      so rather than reporting an empty list.
+    DESC
+    output_options anon: 'Replace administrator names and email addresses with friendly placeholders'
+    option :sort, aliases: '-s', type: :string, desc: 'Sort by column name (or a unique fragment of one)'
+    def admins
+      show_admins(anon: Anonymizer.new(options[:anon]))
+    end
+
+    desc 'alarms', 'Show outstanding controller alarms'
+    output_options anon: 'Replace IP addresses, MAC addresses, and identifiers with friendly placeholders'
+    window_options
+    option :archived, type: :boolean, default: false, desc: 'Include alarms that have been archived'
+    option :sort, aliases: '-s', type: :string, desc: 'Sort by column name (or a unique fragment of one)'
+    def alarms
+      show_alarms(anon: Anonymizer.new(options[:anon]))
+    end
+
+    desc 'events', 'Show recent controller events'
+    long_desc <<~DESC
+      Controller events over a time window. --type filters to events whose key
+      or message contains the given text (e.g. --type admin, --type disconnect).
+    DESC
+    output_options anon: 'Replace IP addresses, MAC addresses, and identifiers with friendly placeholders'
+    window_options limit: 500
+    option :type, aliases: '-t', type: :string, desc: 'Only show events whose key or message contains this text'
+    option :sort, aliases: '-s', type: :string, desc: 'Sort by column name (or a unique fragment of one)'
+    def events
+      show_events(anon: Anonymizer.new(options[:anon]))
+    end
+
+    desc 'threats', 'Show IDS/IPS detections'
+    long_desc <<~DESC
+      Intrusion detection and prevention events, with the signature that fired,
+      where the traffic came from and went to, and what the gateway did about
+      it.
+
+      --severity filters to detections at or above low, medium, or high.
+
+      This requires Threat Management to be licensed and enabled; without it
+      the controller does not serve the endpoint and the command says so.
+    DESC
+    output_options anon: 'Replace IP addresses and identifiers with friendly placeholders'
+    window_options limit: 500
+    option :severity, type: :string, desc: 'Only show detections at or above this severity (low, medium, high)'
+    option :sort, aliases: '-s', type: :string, desc: 'Sort by column name (or a unique fragment of one)'
+    def threats
+      show_threats(anon: Anonymizer.new(options[:anon]))
+    end
+
+    # -------------------------------------------------------------------------
     # Firewall
     # -------------------------------------------------------------------------
 
@@ -443,6 +667,12 @@ module UiManage
       sorting by any column name or a unique fragment of one (e.g. --sort
       mac, --sort "last seen").
 
+      --unknown narrows to clients with no name assigned in UniFi — the ones
+      that showed up without anyone claiming them. --guest narrows to clients
+      on a guest network, --vlan to a single VLAN (use 0 for untagged), and
+      --since to clients first seen within the last N hours, which is the
+      quickest way to spot something new on the network.
+
       --anon (or --anonymous) replaces IP and MAC addresses with friendly
       placeholders.
     DESC
@@ -451,6 +681,10 @@ module UiManage
     option :wired,    type: :boolean, default: false, desc: 'Only show wired clients'
     option :wireless, type: :boolean, default: false, desc: 'Only show wireless clients'
     option :sort,     aliases: '-s', type: :string, desc: 'Sort by column name (or a unique fragment of one) — overrides --ip'
+    option :unknown,  type: :boolean, default: false, desc: 'Only show clients with no name assigned in UniFi'
+    option :guest,    type: :boolean, default: false, desc: 'Only show clients on a guest network'
+    option :vlan,     type: :numeric, desc: 'Only show clients on this VLAN (0 for untagged)'
+    option :since,    type: :numeric, desc: 'Only show clients first seen within this many hours'
     def clients(pattern = nil)
       raise Thor::Error, "ERROR: '--wired' and '--wireless' can't be used together." if options[:wired] && options[:wireless]
 
@@ -463,9 +697,18 @@ module UiManage
 
     desc 'report', 'Generate a full report combining all information commands'
     long_desc <<~DESC
-      Runs every information command (identity, cpu, memory, storage, gateway,
-      clients, firewall, port-forwards, dhcp, power, ports) against a
-      single device and prints them together as one report.
+      Runs every information command against a single device and prints them
+      together as one report: identity, health, cpu, memory, storage, firmware,
+      gateway, clients, wireless experience, wlans, vlans, vpn, firewall,
+      port-forwards, routes, dhcp, power, ports, port errors, admins, settings,
+      alarms, and threats.
+
+      `events` is left out: it is a raw log rather than a statement of
+      configuration, and alarms and threats already carry what is actionable.
+      Windowed sections cover the last 24 hours.
+
+      Sections backed by an endpoint this controller or credential cannot
+      read say so and the report continues.
 
       --anon (or --anonymous) replaces MAC addresses and IP addresses throughout
       the report with realistic-looking placeholders (and, in the identity
@@ -483,6 +726,9 @@ module UiManage
       report_header('Identity')
       show_identity(client: client, anon: anon)
 
+      report_header('Health')
+      show_health(client: client, anon: anon)
+
       report_header('CPU')
       show_cpu(client: client, anon: anon)
 
@@ -492,17 +738,38 @@ module UiManage
       report_header('Storage')
       show_storage(client: client, anon: anon)
 
+      report_header('Firmware')
+      show_firmware(client: client, anon: anon)
+
       report_header('Gateway (WAN)')
       show_gateway(client: client, anon: anon)
 
       report_header('Clients')
       show_clients(client: client, anon: anon)
 
+      report_header('Wireless Experience')
+      show_wifi_experience(client: client, anon: anon)
+
+      report_header('WLANs')
+      show_wlans(client: client, anon: anon)
+
+      report_header('Neighbouring Access Points')
+      show_rogue_aps(client: client, anon: anon)
+
+      report_header('Networks / VLANs')
+      show_vlans(client: client, anon: anon)
+
+      report_header('VPN')
+      show_vpn(client: client, anon: anon)
+
       report_header('Firewall Rules')
       show_firewall(client: client, anon: anon)
 
       report_header('Port Forwards')
       show_port_forwards(client: client, anon: anon)
+
+      report_header('Routes & Dynamic DNS')
+      show_routes(client: client, anon: anon)
 
       report_header('DHCP Networks')
       show_dhcp(client: client, anon: anon)
@@ -515,6 +782,21 @@ module UiManage
 
       report_header('Ports')
       show_ports(client: client, anon: anon)
+
+      report_header('Port Errors')
+      show_port_errors(client: client, anon: anon)
+
+      report_header('Administrators')
+      show_admins(client: client, anon: anon)
+
+      report_header('Site Settings')
+      show_settings(client: client, anon: anon)
+
+      report_header('Alarms')
+      show_alarms(client: client, anon: anon)
+
+      report_header('IDS/IPS Detections')
+      show_threats(client: client, anon: anon)
     end
 
     # -------------------------------------------------------------------------
@@ -1079,6 +1361,7 @@ module UiManage
     end
 
     def show_clients(client: nil, anon: Anonymizer.new(false), pattern: nil)
+      client ||= resolve_client
       devs, sta = with_client(client) { |c| [c.devices, c.clients] }
 
       if pattern
@@ -1086,8 +1369,12 @@ module UiManage
         sta = sta.select { |c| [c['name'], c['hostname'], c['ip']].any? { |v| v.to_s.downcase.include?(needle) } }
       end
 
-      sta = sta.select { |c| c['is_wired'] }     if options[:wired]
-      sta = sta.reject { |c| c['is_wired'] }     if options[:wireless]
+      sta = sta.select { |c| c['is_wired'] }         if options[:wired]
+      sta = sta.reject { |c| c['is_wired'] }         if options[:wireless]
+      sta = sta.select { |c| c['name'].to_s.empty? } if options[:unknown]
+      sta = sta.select { |c| c['is_guest'] }         if options[:guest]
+      sta = select_recent(sta, options[:since])
+      sta = select_vlan(sta, options[:vlan], client)
 
       return Formatter.json(anon.deep_scrub(sta)) if options[:json]
 
@@ -1132,6 +1419,27 @@ module UiManage
         title: "Clients (#{rows.size})",
         sort:  options[:sort]
       )
+    end
+
+    # Clients first seen within the last +hours+. `first_seen` is when the
+    # controller met the device, not when it last connected, so this
+    # answers "what is new here" rather than "what is online".
+    def select_recent(clients, hours)
+      return clients if hours.nil?
+
+      cutoff = Time.now.to_i - (hours.to_i * 3600)
+      clients.select { |c| c['first_seen'].to_i >= cutoff }
+    end
+
+    # Clients on a given VLAN. Networks without a tag report no vlan at
+    # all, so they answer to 0.
+    def select_vlan(clients, vlan, client)
+      return clients if vlan.nil?
+
+      ids = with_client(client) { |c| c.networks }
+            .select { |n| n['vlan'].to_i == vlan.to_i }
+            .map { |n| n['_id'] }
+      clients.select { |c| ids.include?(c['network_id']) }
     end
 
     # Sorts dotted-quad IPs numerically per octet; missing/invalid IPs sort last.

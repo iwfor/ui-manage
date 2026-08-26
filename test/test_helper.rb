@@ -28,6 +28,37 @@ module UiManage
       Client.new(host: host, site: site, transport: transport, **args)
     end
 
+    # Answers each request from +routes+, keyed by a fragment of the endpoint
+    # path. A value that is an Integer is served as that HTTP status, which is
+    # how a test makes an endpoint unavailable; anything else is served as a
+    # successful payload. Unlisted paths answer with an empty list.
+    def stub_transport(routes = {})
+      FakeTransport.new do |req|
+        key = routes.keys.find { |k| req.path.include?(k.to_s) }
+        value = key ? routes[key] : []
+        value.is_a?(Integer) ? FakeTransport.status(value) : FakeTransport.ok(value)
+      end
+    end
+
+    # Runs a CLI command against a stubbed controller and returns what it
+    # printed. Options are the command's own flags.
+    def render(command, routes = {}, **options)
+      # A braceless trailing hash is captured as keywords under Ruby 3, and
+      # keywords may have String keys — so `render(:wlans, 'wlanconf' => [...])`
+      # would silently arrive as an option rather than a route. Endpoint routes
+      # are the String-keyed ones; command flags are the Symbol-keyed ones.
+      routes  = routes.merge(options.select { |k, _| k.is_a?(String) })
+      options = options.reject { |k, _| k.is_a?(String) }
+
+      transport = stub_transport(routes)
+      client    = Client.new(host: 'unifi.test', api_key: 'test-key', transport: transport)
+      shell     = CLI.new([], Thor::CoreExt::HashWithIndifferentAccess.new(options))
+      shell.define_singleton_method(:resolve_client) { client }
+
+      out, = capture_io { shell.public_send(command) }
+      out
+    end
+
     def assert_aborts(message_fragment)
       err = capture_io { assert_raises(SystemExit) { yield } }
       assert_includes err.join, message_fragment

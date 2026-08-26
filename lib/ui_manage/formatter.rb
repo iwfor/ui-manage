@@ -3,8 +3,16 @@ require 'json'
 
 module UiManage
   module Formatter
+    # Every JSON path goes through here, so redaction lives here rather than in
+    # each caller — a new command cannot forget to strip secrets.
     def self.json(data)
-      puts JSON.pretty_generate(data)
+      puts JSON.pretty_generate(Redactor.scrub(data))
+    end
+
+    # Reports an endpoint the controller would not serve. Printed rather than
+    # raised: one unavailable section should not end a whole report.
+    def self.unavailable(label, reason)
+      puts "#{label}: unavailable — #{reason}"
     end
 
     def self.table(headings, rows, title: nil, sort: nil)
