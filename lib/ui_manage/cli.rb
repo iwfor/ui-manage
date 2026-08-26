@@ -95,12 +95,20 @@ module UiManage
       when your controller has a certificate your system trusts — without it,
       connections are vulnerable to man-in-the-middle interception. The setting is
       saved with the device and applies to every later command.
+
+      --remote-access / --no-remote-access records whether this network is
+      supposed to be reachable through UniFi remote (cloud) access. The audit
+      compares the controller against this answer, so it is a policy decision
+      the tool cannot infer. When neither flag is given and the terminal is
+      interactive, login asks; otherwise the setting is left unset and can be
+      filled in later with `ui-manage policy`.
     DESC
     option :name,    aliases: '-n', type: :string,  desc: 'Alias for this device (default: hostname/IP)'
     option :site,    aliases: '-s', type: :string,  desc: 'UniFi site name — the internal identifier shown in Network > Settings > Site (most installs use "default")', default: 'default'
     option :username, aliases: '-u', type: :string,  desc: 'Username for local account auth (will prompt if omitted and --api-key not set)'
     option :api_key, aliases: '-k', type: :string,  desc: 'API key for authentication (Network App 8.x+). Pass the key, or "-" to read it from a hidden prompt/stdin'
     option :verify_ssl, type: :boolean, default: false, desc: 'Verify the controller TLS certificate (off by default — UniFi ships self-signed certs). Saved with the device'
+    option :remote_access, type: :boolean, desc: 'Whether UniFi remote (cloud) access is expected on this network — recorded for the audit. Prompts when omitted on an interactive terminal'
     def login(host)
       name        = options[:name] || host
       config      = Config.new
@@ -124,7 +132,8 @@ module UiManage
         end
 
       config.add_device(name: name, host: host, site: options[:site],
-                        verify_ssl: options[:verify_ssl], **creds)
+                        verify_ssl: options[:verify_ssl],
+                        remote_access_expected: remote_access_policy, **creds)
 
       say "Device '#{name}' (#{host}) saved successfully."
       say 'Set as default device.' if config.devices.length == 1
@@ -152,15 +161,63 @@ module UiManage
         marker  = d['name'] == default ? '*' : ' '
         auth    = d['encrypted_api_key'] ? 'api-key' : "password (#{d['username']})"
         tls     = d['verify_ssl'] ? 'verified' : 'no verify'
-        [marker, d['name'], d['host'], d['site'], auth, tls]
+        [marker, d['name'], d['host'], d['site'], auth, tls, policy_label(d['remote_access_expected'])]
       end
 
       Formatter.table(
-        ['', 'Name', 'Host', 'Site', 'Auth', 'TLS'],
+        ['', 'Name', 'Host', 'Site', 'Auth', 'TLS', 'Remote Access'],
         rows,
         title: 'Configured Devices (* = default)',
         sort:  options[:sort]
       )
+    end
+
+    desc 'policy', "Show or set a device's audit policy"
+    long_desc <<~DESC
+      Audit policy records what this network is *supposed* to look like, so the
+      audit can tell a deliberate configuration apart from a finding. It is
+      stored per device, alongside that device's connection settings.
+
+      With no options, prints the current policy. Otherwise sets what you pass:
+
+        ui-manage policy --remote-access      # remote access is intended here
+
+        ui-manage policy --no-remote-access   # remote access should be off
+
+        ui-manage policy --unset              # back to "not configured"
+
+      --remote-access covers UniFi remote (cloud) access to the controller.
+      Leaving it unset means the audit reports the controller's actual setting
+      without judging it.
+    DESC
+    option :device,        aliases: '-d', type: :string,  desc: 'Device name (uses default if omitted)'
+    option :remote_access, type: :boolean, desc: 'Whether UniFi remote (cloud) access is expected on this network'
+    option :unset,         type: :boolean, default: false, desc: 'Clear the policy back to "not configured"'
+    def policy
+      if options[:unset] && !options[:remote_access].nil?
+        raise Thor::Error, "ERROR: '--unset' can't be combined with '--remote-access'."
+      end
+
+      config = Config.new
+      dev    = begin
+        config.device(options[:device])
+      rescue => e
+        abort e.message
+      end
+      abort 'No devices configured. Run `ui-manage login HOST` to add one.' if dev.nil?
+
+      if options[:unset]
+        dev = config.update_device_policy(dev['name'], remote_access_expected: nil)
+      elsif !options[:remote_access].nil?
+        dev = config.update_device_policy(dev['name'], remote_access_expected: options[:remote_access])
+      end
+
+      Formatter.kv(
+        [['Remote access expected', policy_label(dev['remote_access_expected'])]],
+        title: "Audit policy for '#{dev['name']}'"
+      )
+    rescue ArgumentError => e
+      abort e.message
     end
 
     desc 'use-device NAME', 'Set the default device'
@@ -469,11 +526,49 @@ module UiManage
     # Resolves an --api-key value: "-" reads the key from a hidden prompt (or
     # stdin when piped) so it never appears in shell history or `ps` output.
     def read_api_key(value)
-      return value unless value == '-'
+      return validated_api_key(value) unless value == '-'
 
       key = ($stdin.tty? ? IO.console.getpass('API key: ') : $stdin.gets.to_s).chomp
       abort 'No API key provided.' if key.empty?
+      validated_api_key(key)
+    end
+
+    # A control character in the key would be rejected by the transport anyway;
+    # catching it here says so while the user is still at the prompt.
+    def validated_api_key(key)
+      abort 'API key must not contain control characters.' if key.match?(/[[:cntrl:]]/)
       key
+    end
+
+    # How an unset/true/false policy value reads in output. Unset is a real
+    # third state: the audit reports the controller's setting but does not
+    # call it right or wrong.
+    def policy_label(value)
+      case value
+      when true  then 'expected'
+      when false then 'not expected'
+      else 'unset'
+      end
+    end
+
+    # Whether this network is supposed to have controller remote/cloud access
+    # enabled. The audit only reports the controller's actual setting as a
+    # finding when it disagrees with this, so the answer has to come from the
+    # operator rather than a built-in assumption.
+    def remote_access_policy
+      return options[:remote_access] unless options[:remote_access].nil?
+
+      unless $stdin.tty?
+        say 'Remote access policy left unset — set it with `ui-manage policy --remote-access` ' \
+            'or `--no-remote-access`.'
+        return nil
+      end
+
+      say ''
+      say 'Audit policy: should this controller be reachable through UniFi remote (cloud) access?'
+      say 'Answer no unless you deliberately manage this network from outside it — the audit'
+      say 'reports a finding whenever the controller disagrees with your answer.'
+      yes?('Remote access expected? [y/N]')
     end
 
     def resolve_client

@@ -4,6 +4,12 @@ module UiManage
   class Config
     CONFIG_FILE = File.join(CONFIG_DIR, 'config.toml')
 
+    # Per-device audit policy: what this network's owner considers correct,
+    # which the audit compares the controller's actual state against. Stored
+    # with the device because the answer differs per site — remote access is
+    # a finding on one network and a requirement on the next.
+    POLICY_KEYS = %w[remote_access_expected].freeze
+
     def initialize
       Encryption.ensure_key # also creates CONFIG_DIR
       @data = load_file
@@ -25,12 +31,14 @@ module UiManage
         raise("Device '#{name}' not found. Run `ui-manage devices` to list configured devices.")
     end
 
-    def add_device(name:, host:, site: 'default', username: nil, encrypted_password: nil, encrypted_api_key: nil, verify_ssl: false)
+    def add_device(name:, host:, site: 'default', username: nil, encrypted_password: nil,
+                   encrypted_api_key: nil, verify_ssl: false, remote_access_expected: nil)
       { 'name' => name, 'host' => host, 'site' => site, 'username' => username }.each do |field, value|
         validate_field!(field, value)
       end
 
       @data['devices'] ||= []
+      previous = @data['devices'].find { |d| d['name'] == name }
       @data['devices'].reject! { |d| d['name'] == name }
 
       entry = { 'name' => name, 'host' => host, 'site' => site, 'verify_ssl' => verify_ssl }
@@ -40,6 +48,12 @@ module UiManage
         entry['username']           = username
         entry['encrypted_password'] = encrypted_password
       end
+
+      # An unanswered policy question keeps whatever the device already had,
+      # so re-running `login` to rotate a credential doesn't silently reset it.
+      policy = remote_access_expected.nil? ? previous&.dig('remote_access_expected') : !!remote_access_expected
+      entry['remote_access_expected'] = policy unless policy.nil?
+
       @data['devices'] << entry
 
       if @data['devices'].length == 1
@@ -48,6 +62,25 @@ module UiManage
       end
 
       save
+    end
+
+    # Updates audit policy on an existing device. Only POLICY_KEYS may be set
+    # this way — credentials and connection details go through add_device, so
+    # they are never changed without re-authenticating.
+    def update_device_policy(name, **attrs)
+      unknown = attrs.keys.map(&:to_s) - POLICY_KEYS
+      raise ArgumentError, "Unknown policy setting(s): #{unknown.join(', ')}" if unknown.any?
+
+      dev = device(name)
+      attrs.each do |key, value|
+        if value.nil?
+          dev.delete(key.to_s)
+        else
+          dev[key.to_s] = !!value
+        end
+      end
+      save
+      dev
     end
 
     def set_default(name)

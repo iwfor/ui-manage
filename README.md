@@ -20,6 +20,12 @@ bin/ui-manage login --api-key - 192.168.1.1     # prompts for the key (or reads 
 bin/ui-manage login --username admin 192.168.1.1
 ```
 
+During `login` you are asked whether UniFi remote (cloud) access is expected on
+this network. The answer is a policy decision the tool can't infer, and the
+audit compares the controller against it; pass `--remote-access` or
+`--no-remote-access` to answer non-interactively, or change it later with
+`ui-manage policy`.
+
 Pass `--verify-ssl` to `login` to enable TLS certificate verification for that
 device (off by default, since UniFi controllers ship with self-signed
 certificates); the setting is saved with the device.
@@ -48,6 +54,7 @@ Run `bin/ui-manage help` for the full command list, or
 | `use-device NAME` | Set the default device |
 | `remove-device NAME` | Remove a configured device |
 | `devices` | List configured devices |
+| `policy` | Show or set a device's audit policy |
 | `completions SHELL` | Print a bash or zsh completion script |
 | `report` | Run every information command against a device and print them together |
 | `identity` | Device name, serial, MAC, firmware, and other identifiers |
@@ -83,6 +90,47 @@ echo 'eval "$(bin/ui-manage completions bash)"' >> ~/.bashrc
 echo 'eval "$(bin/ui-manage completions zsh)"'  >> ~/.zshrc
 ```
 
+## Audit policy
+
+Some findings depend on intent rather than on configuration alone — remote
+access is a problem on one network and a requirement on the next. `policy`
+records those decisions per device:
+
+```
+bin/ui-manage policy                      # show the current policy
+bin/ui-manage policy --remote-access      # remote access is intended here
+bin/ui-manage policy --no-remote-access   # remote access should be off
+bin/ui-manage policy --unset              # back to "not configured"
+```
+
+Left unset, the audit reports the controller's actual setting without judging
+it.
+
+## Degraded checks
+
+Not every controller exposes every endpoint: the admin interface, IDS/IPS
+events, and several settings endpoints vary with the Network application
+version, and an API key generally has less access than a local account — it
+usually cannot read the admin list at all. Those endpoints are treated as
+optional. When one is refused (HTTP 401/403/404, or an `api.err.NoPermission`
+response), the reason is recorded and the checks that depend on it are
+reported as skipped rather than passing silently or failing the whole run.
+
+Core endpoints — devices, clients, networks, firewall rules, port forwards,
+DHCP — are not optional; a failure there is a real error.
+
+## Development
+
+```
+bundle install
+bundle exec rake test
+```
+
+Tests run against a fake transport and never reach the network. They point
+`UI_MANAGE_CONFIG_DIR` at a temporary directory, so the real
+`~/.config/ui-manage` is never touched; set that variable yourself to keep a
+separate profile.
+
 ## Configuration
 
 Device credentials are stored, encrypted, in `~/.config/ui-manage/config.toml`.
@@ -99,6 +147,10 @@ Device credentials are stored, encrypted, in `~/.config/ui-manage/config.toml`.
   command shows each device's TLS mode.
 - Secrets are passed to `curl` via a `0600` config file, never argv, so they
   don't appear in the process list. `--verbose` output always redacts them.
+- Values written into that config file are escaped for curl's quoting rules,
+  and headers carrying control characters are refused outright — the file is
+  line-oriented, so an unescaped newline in a credential could otherwise
+  inject an arbitrary curl directive.
 - Gem versions are pinned exactly in the `Gemfile`. To check dependencies
   against the ruby-advisory-db:
 
