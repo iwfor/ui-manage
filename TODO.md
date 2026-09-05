@@ -458,6 +458,34 @@ Decisions taken along the way:
 Not verified live yet: `PUT /rest/user/{id}` with the fixed-IP fields —
 the same request `pin` makes, still unexercised against the UDM Pro.
 
+Read against the UDM Pro on 2026-09-05: every reservation the controller's
+own UI made carries no `network_id` at all on `/rest/user`, though
+`/stat/sta` reports one. `reserve` writes the field, so re-running it over
+an existing reservation is what makes `dhcp_reservation` able to
+range-check it — the case the "recording the network it belongs to"
+message covers.
+
+---
+
+## Phase 10 — Naming clients  ✅ done (2026-09-05)
+
+- [x] `client-set CLIENT --name NAME`, named for the `vlan-set` / `wlan-set`
+      family rather than a bare `rename`, so per-client settings have a home
+      to grow into
+- [x] `--name ""` clears it: `name` empty and `noted` false together, which
+      is the pair UniFi keeps — `noted` is what marks a client as one
+      somebody has named, whatever hostname it reports
+- [x] An unchanged name is a no-op with a message, as `unpin` and `reserve`
+      are
+- [x] `clients` marks a reserved address with ` *` and prints a legend under
+      the table when any row carries one; `/stat/sta` already reports
+      `use_fixedip` and `fixed_ip`, so no extra request
+- [x] 7 new tests; README: "Naming a client"
+
+The mark goes on the address, not the client: a client sitting away from
+its reservation is left unmarked, because ` *` claims that *this address*
+is fixed.
+
 ---
 
 ## Still open

@@ -7,6 +7,9 @@ module UiManage
     include AuditViews
     include ManageActions
 
+    # Appended to an address the controller has reserved for the client.
+    RESERVED_MARK = ' *'.freeze
+
     def self.exit_on_failure? = true
 
     def self.start(args = ARGV, config = {})
@@ -968,6 +971,27 @@ module UiManage
       unpin_client(client)
     end
 
+    desc 'client-set CLIENT', "Change a client's settings"
+    map 'client-set' => :client_set
+    long_desc <<~DESC
+      Names a client, which is the name every view here shows for it and the
+      name the controller shows in its own UI. CLIENT is a name, hostname,
+      MAC address, or IP address, as for `pin` — so a client the controller
+      has never been told about is named by its MAC or its hostname.
+
+        ui-manage client-set e4:24:6c:90:2d:48 --name "Front Door Camera"
+
+        ui-manage client-set unknown-device --name Doorbell
+
+      `--name ""` clears the name, after which the client shows as whatever
+      hostname it reports, and `clients --unknown` lists it again.
+    DESC
+    option :device, aliases: '-d', type: :string, desc: 'Device name (uses default if omitted)'
+    option :name,   type: :string, desc: 'Name to show for the client ("" clears it)'
+    def client_set(client)
+      rename_client(client)
+    end
+
     desc 'reserve CLIENT IP', 'Reserve a static IP address for a client (DHCP)'
     long_desc <<~DESC
       Gives a client the same address every time — UniFi's "Fixed IP" on the
@@ -1919,7 +1943,7 @@ module UiManage
 
         [
           anon.device_name(c['name'] || c['hostname']) || '—',
-          anon.ip(c['ip']) || '—',
+          client_address(c, anon),
           anon.mac(c['mac']),
           wired ? 'wired' : 'wireless',
           via,
@@ -1934,6 +1958,18 @@ module UiManage
         title: "Clients (#{rows.size})",
         sort:  options[:sort]
       )
+      say "#{RESERVED_MARK.strip} reserved (static DHCP)" if rows.any? { |row| row[1].to_s.end_with?(RESERVED_MARK) }
+    end
+
+    # Marks an address the client is reserved at, so a static address shows
+    # where you read the address rather than only in `dhcp --leases`. A
+    # client away from its reservation is not marked: the mark says "this
+    # address is fixed", not "this client has a reservation somewhere".
+    def client_address(client, anon)
+      address = anon.ip(client['ip']) || '—'
+      return address unless client['use_fixedip'] && client['fixed_ip'] == client['ip']
+
+      "#{address}#{RESERVED_MARK}"
     end
 
     # Clients first seen within the last +hours+. `first_seen` is when the

@@ -173,6 +173,38 @@ module UiManage
       end
     end
 
+    # --- client settings ------------------------------------------------------
+
+    # The name the controller shows for a client, which is the one every
+    # view here reads first. `noted` is the flag UniFi sets beside it: a
+    # client is "named" when someone has given it a name, whatever hostname
+    # it happens to report.
+    def rename_client(pattern)
+      abort 'Nothing to change — give a setting to set, such as --name.' if options[:name].nil?
+
+      name = options[:name].strip
+      client = resolve_client
+      with_client(client) do |c|
+        user = find_known_client(c.known_clients, pattern)
+
+        if user['name'].to_s == name
+          say name.empty? ? "#{client_label(user)} has no name." : "#{client_label(user)} is already named #{name.inspect}."
+          return
+        end
+
+        c.update_known_client(user['_id'], 'name' => name, 'noted' => !name.empty?)
+
+        if name.empty?
+          say "Cleared the name from #{client_label(user)}; " \
+              "it shows as #{user['hostname'] ? user['hostname'].inspect : 'unnamed'} from now on."
+        else
+          # client_label already carries the name it had, so the new one is
+          # all this has to add.
+          say "Renamed #{client_label(user)} to #{name.inspect}."
+        end
+      end
+    end
+
     # --- static DHCP reservations ---------------------------------------------
 
     def reserve_client(pattern, address)
@@ -192,8 +224,16 @@ module UiManage
                                            'fixed_ip'    => ip.to_s,
                                            'network_id'  => net['_id'])
 
-        was = user['use_fixedip'] && user['fixed_ip']
-        say "Reserved #{ip} for #{client_label(user)} on '#{net['name']}'#{was ? " (was #{was})" : ''}."
+        # A record that already holds the address is being rewritten for the
+        # network it belongs to: the controller leaves `network_id` unset
+        # until something sets it, and `dhcp_reservation` needs it to tell
+        # an out-of-range reservation from a valid one.
+        was  = user['use_fixedip'] && user['fixed_ip']
+        note = if was == ip.to_s then ' (recording the network it belongs to)'
+               elsif was         then " (was #{was})"
+               else ''
+               end
+        say "Reserved #{ip} for #{client_label(user)} on '#{net['name']}'#{note}."
         say 'The client keeps its current address until its lease expires — reconnect it to take the new one now.'
         if (holder = dynamic_holder(c.known_clients, user, ip))
           say "Note: #{client_label(holder)} currently holds #{ip} on a dynamic lease; " \

@@ -488,5 +488,31 @@ end
 
       assert_includes render(:clients, routes, vlan: 0), 'Untagged'
     end
+
+    # --- reserved addresses ---------------------------------------------------
+
+    def test_clients_mark_an_address_the_client_is_reserved_at
+      routes = { 'stat/sta' => [
+        { 'name' => 'Printer', 'mac' => 'aa:bb:cc:dd:ee:01', 'ip' => '10.0.0.5',
+          'use_fixedip' => true, 'fixed_ip' => '10.0.0.5' },
+        { 'name' => 'Laptop', 'mac' => 'aa:bb:cc:dd:ee:02', 'ip' => '10.0.0.6' },
+        # A reservation it has not picked up yet: the mark belongs to the
+        # address, and this is not that address.
+        { 'name' => 'Roamer', 'mac' => 'aa:bb:cc:dd:ee:03', 'ip' => '10.0.0.7',
+          'use_fixedip' => true, 'fixed_ip' => '10.0.0.9' }
+      ] }
+      out = render(:clients, routes)
+
+      assert_includes out, '10.0.0.5 *'
+      refute_includes out, '10.0.0.6 *'
+      refute_includes out, '10.0.0.7 *'
+      assert_includes out, '* reserved (static DHCP)'
+    end
+
+    def test_clients_leave_the_legend_off_when_no_address_is_reserved
+      routes = { 'stat/sta' => [{ 'name' => 'Laptop', 'mac' => 'aa:bb:cc:dd:ee:02', 'ip' => '10.0.0.6' }] }
+
+      refute_includes render(:clients, routes), 'reserved (static DHCP)'
+    end
   end
 end

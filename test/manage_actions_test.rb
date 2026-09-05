@@ -303,6 +303,49 @@ module UiManage
       refute_includes out, 'printer'
     end
 
+    # --- client-set -----------------------------------------------------------
+
+    def test_client_set_names_a_client
+      out, requests, status = perform(:client_set, routes, args: ['aa:bb:cc:dd:ee:02'], name: 'Office Printer')
+
+      assert_equal 0, status
+      put = writes(requests).first
+      assert_equal :put, put.method
+      assert_match %r{/rest/user/u2\z}, put.path
+      assert_equal({ 'name' => 'Office Printer', 'noted' => true }, put.json_body)
+      assert_includes out, %{Renamed 'printer' (aa:bb:cc:dd:ee:02) to "Office Printer"}
+    end
+
+    def test_client_set_renames_a_client_that_already_has_a_name
+      out, requests, = perform(:client_set, routes, args: ['Living Room TV'], name: 'Den TV')
+
+      assert_equal 'Den TV', writes(requests).first.json_body['name']
+      assert_includes out, %{Renamed 'Living Room TV' (aa:bb:cc:dd:ee:01) to "Den TV"}
+    end
+
+    def test_client_set_clears_a_name_and_unsets_noted
+      out, requests, status = perform(:client_set, routes, args: ['Living Room TV'], name: '')
+
+      assert_equal 0, status
+      assert_equal({ 'name' => '', 'noted' => false }, writes(requests).first.json_body)
+      assert_includes out, 'Cleared the name'
+    end
+
+    def test_client_set_leaves_an_unchanged_name_alone
+      out, requests, = perform(:client_set, routes, args: ['Living Room Lamp'], name: 'Living Room Lamp')
+
+      assert_empty writes(requests)
+      assert_includes out, 'already named'
+    end
+
+    def test_client_set_needs_a_setting_to_set
+      out, requests, status = perform(:client_set, routes, args: ['printer'])
+
+      assert_equal 1, status
+      assert_empty writes(requests)
+      assert_includes out, 'Nothing to change'
+    end
+
     # --- reserve / unreserve --------------------------------------------------
 
     def test_reserve_sets_a_fixed_ip_on_the_network_holding_it
@@ -364,6 +407,20 @@ end
 
       assert_empty writes(requests)
       assert_includes out, 'already reserves'
+    end
+
+    # The controller leaves `network_id` unset on a reservation made through
+    # its own UI, and `dhcp_reservation` needs it to range-check one.
+    def test_reserve_records_the_network_on_a_reservation_that_lacks_one
+      users_without_network = users.map { |u| u['_id'] == 'u3' ? u.reject { |k, _| k == 'network_id' } : u }
+      out, requests, status = perform(:reserve, routes(USERS => users_without_network),
+                                      args: ['Living Room Lamp', '192.168.1.60'])
+
+      assert_equal 0, status
+      assert_equal({ 'use_fixedip' => true, 'fixed_ip' => '192.168.1.60', 'network_id' => 'lan' },
+                   writes(requests).first.json_body)
+      assert_includes out, 'recording the network it belongs to'
+      refute_includes out, '(was '
     end
 
     def test_reserve_warns_when_another_client_holds_the_address_dynamically

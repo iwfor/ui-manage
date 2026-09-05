@@ -73,6 +73,7 @@ Run `bin/ui-manage help` for the full command list, or
 | `vlan-create NAME` / `vlan-set NAME` / `vlan-delete NAME` | Create, change, and delete networks (VLANs) |
 | `pins` / `pin CLIENT` / `unpin CLIENT` | Pin a client to a network (VLAN) whatever it connects through |
 | `reserve CLIENT IP` / `unreserve CLIENT` | Reserve a static DHCP address for a client, or release it |
+| `client-set CLIENT` | Change a client's settings — currently its name |
 | `wlan-set SSID` | Change a wireless network: network/VLAN, guest, isolation, security, passphrase, band |
 | `vpn` | VPN servers and site-to-site tunnels |
 | `routes` | Static routes and dynamic DNS entries |
@@ -164,6 +165,19 @@ network whatever SSID or switch port it arrives through, from its next
 connection. A wired client only lands on the VLAN if its switch port carries
 it (a trunk or "all" port profile rather than a single native VLAN). A client
 may be given by name, hostname, MAC address, or IP address.
+
+### Naming a client
+
+```
+bin/ui-manage client-set e4:24:6c:90:2d:48 --name "Front Door Camera"
+bin/ui-manage client-set unknown-device --name Doorbell
+bin/ui-manage client-set "Front Door Camera" --name ""    # back to its hostname
+```
+
+The name is what every view here shows for the client, and what the
+controller shows in its own UI. A client that has never been named is
+reached by its MAC address or the hostname it reports — `clients
+--unknown` lists exactly those.
 
 ### Reserving a static IP address
 
