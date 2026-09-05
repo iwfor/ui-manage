@@ -61,7 +61,7 @@ module UiManage
     # One flag, spelled one way, on every command that prints information.
     # The exempt ones change state or print a script, where JSON means nothing.
     def test_every_information_command_takes_the_same_json_flag
-      exempt = %w[help login use_device remove_device completions]
+      exempt = %w[help login use_device remove_device completions vlan_create vlan_set vlan_delete pin unpin wlan_set]
 
       CLI.commands.each do |name, command|
         next if exempt.include?(name)

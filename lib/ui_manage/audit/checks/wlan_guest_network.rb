@@ -13,19 +13,23 @@ module UiManage
         category    :security
         severity    :high
         requires    %i[wlans networks]
-        remediation 'Settings > Networks: give the guest SSID its own network with ' \
-                    'purpose "Guest", which applies client isolation and blocks ' \
-                    'access to other networks.'
+        remediation 'Give the guest SSID its own network in the Hotspot firewall zone ' \
+                    '(or, before Network 9, with purpose "Guest"), which blocks access ' \
+                    'to other networks: `ui-manage vlan-create Guest --vlan N --subnet ' \
+                    'X --guest`, then `ui-manage wlan-set SSID --network Guest --guest`.'
 
         def run
           networks = data(:networks).each_with_object({}) { |n, h| h[n['_id']] = n }
+          # Zones only exist on Network 9+; without them the legacy fields
+          # on the network are all there is to judge by.
+          zones    = FirewallZone.by_network(data(:firewall_zones))
 
           data(:wlans).each do |wlan|
             next unless wlan['enabled'] && wlan['is_guest']
 
             network = networks[wlan['networkconf_id']]
             next if network.nil? # no mapping to judge
-            next if guest_network?(network)
+            next if guest_network?(network, zones[network['_id']])
 
             finding(
               subject:  wlan['name'],
@@ -33,17 +37,18 @@ module UiManage
                         "a #{network['purpose'] || 'non-guest'} network — guest clients are " \
                         'not isolated from it.',
               evidence: { 'network' => network['name'], 'purpose' => network['purpose'],
-                          'vlan' => network['vlan'] }
+                          'vlan' => network['vlan'], 'zone' => zones.dig(network['_id'], 'name') }.compact
             )
           end
         end
 
         private
 
-        def guest_network?(network)
+        def guest_network?(network, zone)
           network['purpose'].to_s == 'guest' ||
             network['is_guest'] ||
-            network['network_isolation_enabled']
+            network['network_isolation_enabled'] ||
+            FirewallZone.guest?(zone)
         end
       end
     end

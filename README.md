@@ -1,8 +1,9 @@
 # ui-manage
 
-A command-line tool for querying a UniFi controller (e.g. a UDM Pro) over its
-REST API — device identity, gateway/WAN status, connected clients, switch
-ports, firewall rules, port forwards, DHCP, and system health.
+A command-line tool for querying and managing a UniFi controller (e.g. a UDM
+Pro) over its REST API — device identity, gateway/WAN status, connected
+clients, switch ports, firewall rules, port forwards, DHCP, and system health
+to read; networks (VLANs), client pinning, and wireless settings to change.
 
 ## Setup
 
@@ -67,7 +68,10 @@ Run `bin/ui-manage help` for the full command list, or
 | `firewall` | Firewall rules |
 | `port-forwards` | Port forwarding rules |
 | `dhcp` | DHCP network configuration, leases, and reservations |
-| `vlans` | Networks and VLANs with their segmentation settings |
+| `vlans` | Networks and VLANs with their segmentation settings and firewall zone |
+| `vlan-create NAME` / `vlan-set NAME` / `vlan-delete NAME` | Create, change, and delete networks (VLANs) |
+| `pins` / `pin CLIENT` / `unpin CLIENT` | Pin a client to a network (VLAN) whatever it connects through |
+| `wlan-set SSID` | Change a wireless network: network/VLAN, guest, isolation, security, passphrase, band |
 | `vpn` | VPN servers and site-to-site tunnels |
 | `routes` | Static routes and dynamic DNS entries |
 | `wlans` | Wireless networks and their security settings; `--insecure-only` |
@@ -109,6 +113,77 @@ Pass `-v/--verbose` on any command to print the curl commands being executed
 (secrets are always redacted). `--timeout SECONDS` sets how long to wait for
 each controller request (default 30); an audit reads many endpoints, so its
 worst case is that timeout times the number of them.
+
+## Managing the network
+
+The management commands change the controller. Each one resolves its target
+by name first — the full name, or a unique part of it — and refuses to act
+on an ambiguous match, a WAN network, or a value it can validate as wrong,
+before anything is sent.
+
+### Networks (VLANs)
+
+```
+bin/ui-manage vlan-create IoT --vlan 30 --subnet 192.168.30.1/24 --isolate
+bin/ui-manage vlan-create Guest --vlan 20 --subnet 192.168.20.0/24 --guest
+bin/ui-manage vlan-set IoT --no-internet --dhcp-range 192.168.30.100-192.168.30.199
+bin/ui-manage vlan-set Lab --zone hotspot
+bin/ui-manage vlan-delete Lab            # asks; --yes to skip, required when not a terminal
+```
+
+`--subnet` is the gateway address and prefix; given the network address
+instead, the gateway becomes the first usable address. DHCP is on by default
+from five addresses above the gateway to the last usable one. `--isolate`
+blocks the network from every other network (UniFi's "Isolate Network"),
+and `--no-internet` keeps it off the internet too.
+
+`--guest` makes a guest network. On Network 9 and later, where the firewall
+is zone-based, that means the Hotspot zone, whose clients reach the internet
+and nothing internal (the controller marks such a network with the `guest`
+purpose itself); on an older controller it is the legacy `guest` purpose.
+`--isolate` is for ordinary networks only: the controller refuses it on a
+guest network, which the zone already keeps from the LAN. `--zone NAME` puts
+a network in any zone (`vlans` shows which zone each is in).
+
+`vlan-delete` refuses while a wireless network or a pinned client still
+uses the network, and lists them.
+
+### Pinning clients to a VLAN
+
+```
+bin/ui-manage pin "Living Room TV" --vlan 30
+bin/ui-manage pin aa:bb:cc:dd:ee:ff --network IoT
+bin/ui-manage pins
+bin/ui-manage unpin "Living Room TV"
+```
+
+A pin is UniFi's per-client network override: the client lands on that
+network whatever SSID or switch port it arrives through, from its next
+connection. A wired client only lands on the VLAN if its switch port carries
+it (a trunk or "all" port profile rather than a single native VLAN). A client
+may be given by name, hostname, MAC address, or IP address.
+
+### Wireless networks
+
+```
+bin/ui-manage wlan-set ZombieGuest --network Guest --guest --isolate
+bin/ui-manage wlan-set Zombieland --security wpa2-wpa3 --passphrase -
+bin/ui-manage wlan-set setup --no-enabled
+bin/ui-manage wlan-set Attic --band 5g,6g --hidden
+```
+
+`--network` is the LAN network the SSID's clients join, `--guest` applies
+the controller's guest policy (and hotspot portal, if one is configured),
+and `--isolate` stops the SSID's clients from seeing each other. Together
+with a network made by `vlan-create --guest`, those three are what make an
+SSID a guest network rather than a second door into the LAN — which is what
+the `wlan_guest_network` audit check looks for.
+
+`--security` is `open`, `wpa2`, `wpa3`, or `wpa2-wpa3`; WPA3 needs protected
+management frames, so it sets `--pmf required` (`wpa2-wpa3` sets `optional`)
+unless `--pmf` is given. `--passphrase -` reads the passphrase from a hidden
+prompt, or from stdin when piped, so it stays out of shell history. The
+passphrase is never printed back.
 
 ## Shell completions
 

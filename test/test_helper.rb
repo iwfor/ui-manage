@@ -30,12 +30,15 @@ module UiManage
 
     # Answers each request from +routes+, keyed by a fragment of the endpoint
     # path. A value that is an Integer is served as that HTTP status, which is
-    # how a test makes an endpoint unavailable; anything else is served as a
+    # how a test makes an endpoint unavailable; a callable is given the
+    # request and its result served the same way, which is how a test answers
+    # a write differently from a read; anything else is served as a
     # successful payload. Unlisted paths answer with an empty list.
     def stub_transport(routes = {})
       FakeTransport.new do |req|
         key = routes.keys.find { |k| req.path.include?(k.to_s) }
         value = key ? routes[key] : []
+        value = value.call(req) if value.respond_to?(:call)
         value.is_a?(Integer) ? FakeTransport.status(value) : FakeTransport.ok(value)
       end
     end
@@ -61,7 +64,31 @@ module UiManage
       shell.define_singleton_method(:resolve_client) { client }
       # Views that reach the audit need the device entry too, for its policy.
       shell.define_singleton_method(:resolve_device) { device }
+      # Tests of commands that write need to see what was sent.
+      shell.define_singleton_method(:transport) { transport }
       shell
+    end
+
+    # Runs a command that writes to the controller and returns what it
+    # printed (stdout and stderr together, since a refusal is an abort), the
+    # requests it made, and its exit status (0 when it did not exit).
+    def perform(command, routes = {}, args: [], **options)
+      routes, options = split_routes(routes, options)
+      shell = cli_for(command, routes, options)
+      out, err, status = run_capturing(shell, command, args)
+      [out + err, shell.transport.requests, status]
+    end
+
+    def run_capturing(shell, command, args)
+      status = 0
+      out, err = capture_io do
+        begin
+          shell.public_send(command, *args)
+        rescue SystemExit => e
+          status = e.status
+        end
+      end
+      [out, err, status]
     end
 
     # Thor applies option defaults while parsing argv. Constructing a command
@@ -95,15 +122,7 @@ module UiManage
     # Like #render, for commands that exit. Returns [output, exit status].
     def render_with_status(command, routes = {}, args: [], **options)
       routes, options = split_routes(routes, options)
-      shell  = cli_for(command, routes, options)
-      status = 0
-      out, = capture_io do
-        begin
-          shell.public_send(command, *args)
-        rescue SystemExit => e
-          status = e.status
-        end
-      end
+      out, _err, status = run_capturing(cli_for(command, routes, options), command, args)
       [out, status]
     end
 

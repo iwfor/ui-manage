@@ -382,7 +382,8 @@ module UiManage
     end
 
     def show_vlans(client: nil, anon: Anonymizer.new(false))
-      nets = with_client(client) { |c| c.networks }
+      client ||= resolve_client
+      nets, zones = with_client(client) { |c| [c.networks, c.optional(:firewall_zones)] }
       nets = nets.reject { |n| n['purpose'] == 'wan' } unless options[:all]
 
       return Formatter.json(anon.deep_scrub(nets)) if options[:json]
@@ -392,12 +393,14 @@ module UiManage
         return
       end
 
+      zone_names = zone_names_by_network(zones)
       rows = nets.map do |n|
         [
           n['name'],
           n['vlan'] || (n['vlan_enabled'] == false ? 'untagged' : '-'),
           anon.scrub(n['ip_subnet'] || '-'),
           n['purpose'] || '-',
+          zone_names[n['_id']] || '-',
           Formatter.enabled_badge(n['enabled'] != false),
           n['dhcpd_enabled'] ? 'yes' : 'no',
           isolation_label(n),
@@ -406,11 +409,17 @@ module UiManage
       end
 
       Formatter.table(
-        ['Name', 'VLAN', 'Subnet', 'Purpose', 'Enabled', 'DHCP', 'Isolated', 'Internet'],
+        ['Name', 'VLAN', 'Subnet', 'Purpose', 'Zone', 'Enabled', 'DHCP', 'Isolated', 'Internet'],
         rows,
         title: "Networks / VLANs (#{rows.size})",
         sort:  options[:sort]
       )
+    end
+
+    # network id => zone name. Empty when the controller has no zones
+    # (before Network 9), so the column reads "-" rather than failing.
+    def zone_names_by_network(zones)
+      FirewallZone.by_network(zones).transform_values { |z| z['name'] }
     end
 
     def isolation_label(net)

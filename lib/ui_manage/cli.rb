@@ -5,6 +5,7 @@ require 'stringio'
 module UiManage
   class CLI < Thor
     include AuditViews
+    include ManageActions
 
     def self.exit_on_failure? = true
 
@@ -829,6 +830,190 @@ module UiManage
     end
 
     # -------------------------------------------------------------------------
+    # Management: networks (VLANs), client pinning, wireless settings
+    # -------------------------------------------------------------------------
+
+    desc 'vlan-create NAME', 'Create a network (VLAN)'
+    map 'vlan-create' => :vlan_create
+    long_desc <<~DESC
+      Creates a LAN network with its own VLAN tag and subnet, served by the
+      gateway. --vlan and --subnet are required; everything else has the
+      controller's own defaults.
+
+        ui-manage vlan-create IoT --vlan 30 --subnet 192.168.30.1/24
+
+        ui-manage vlan-create Guest --vlan 20 --subnet 192.168.20.0/24 --guest
+
+      --subnet takes the gateway address and prefix (192.168.20.1/24). Given
+      the network address instead (192.168.20.0/24), the gateway becomes the
+      first usable address. DHCP is on by default, from five addresses above
+      the gateway to the last usable one; --dhcp-range START-STOP chooses a
+      different pool and --no-dhcp turns it off.
+
+      --guest makes a guest network: on a controller with firewall zones
+      (Network 9 and later) that means the Hotspot zone, whose clients reach
+      the internet and nothing internal (the controller marks such a network
+      with the "guest" purpose itself); on an older controller it is the
+      legacy "guest" purpose. Then point a wireless network at it with
+      `ui-manage wlan-set SSID --network NAME --guest`.
+
+      --isolate blocks the network from every other network (the "Isolate
+      Network" switch), which is the usual choice for IoT. It is for ordinary
+      networks only: the controller refuses it on a guest network, which the
+      Hotspot zone already keeps from the LAN. --no-internet keeps a network
+      off the internet as well. --zone NAME puts it in a named firewall zone
+      (Internal, Hotspot, Dmz, or one you created).
+    DESC
+    option :device,     aliases: '-d', type: :string,  desc: 'Device name (uses default if omitted)'
+    option :vlan,       type: :numeric, required: true, desc: 'VLAN tag (1-4094)'
+    option :subnet,     type: :string,  required: true, desc: 'Gateway address and prefix, e.g. 192.168.20.1/24'
+    option :guest,      type: :boolean, default: false, desc: 'Make it a guest network: Hotspot zone (or the legacy guest purpose)'
+    option :isolate,    type: :boolean, desc: 'Block this network from every other network'
+    option :internet,   type: :boolean, desc: 'Allow internet access (default on; --no-internet blocks it)'
+    option :dhcp,       type: :boolean, desc: 'Serve DHCP (default on; --no-dhcp turns it off)'
+    option :dhcp_range, type: :string,  desc: 'DHCP pool as START-STOP (default: gateway+5 to the last address)'
+    option :purpose,    type: :string,  desc: "Network purpose: #{NetworkConfig::PURPOSES.join(' or ')} (default corporate)"
+    option :zone,       type: :string,  desc: 'Firewall zone by name (Network 9+); default Internal, or Hotspot with --guest'
+    def vlan_create(name)
+      create_vlan(name)
+    end
+
+    desc 'vlan-set NAME', "Change a network's settings"
+    map 'vlan-set' => :vlan_set
+    long_desc <<~DESC
+      Changes one or more settings on an existing network, leaving the rest
+      as they are. NAME is the network's full name or a unique part of it;
+      WAN networks are never matched.
+
+        ui-manage vlan-set IoT --isolate --no-internet
+
+        ui-manage vlan-set Guest --zone hotspot
+
+        ui-manage vlan-set Lab --subnet 10.0.5.1/24 --dhcp-range 10.0.5.50-10.0.5.99
+
+      A new --subnet without a --dhcp-range moves the DHCP pool into the new
+      subnet at the default position. --rename changes the name.
+    DESC
+    option :device,     aliases: '-d', type: :string,  desc: 'Device name (uses default if omitted)'
+    option :rename,     type: :string,  desc: 'New name for the network'
+    option :vlan,       type: :numeric, desc: 'New VLAN tag (1-4094)'
+    option :subnet,     type: :string,  desc: 'New gateway address and prefix, e.g. 192.168.20.1/24'
+    option :isolate,    type: :boolean, desc: 'Block this network from every other network (--no-isolate to allow)'
+    option :internet,   type: :boolean, desc: 'Allow internet access (--no-internet blocks it)'
+    option :dhcp,       type: :boolean, desc: 'Serve DHCP (--no-dhcp turns it off)'
+    option :dhcp_range, type: :string,  desc: 'DHCP pool as START-STOP'
+    option :purpose,    type: :string,  desc: "Network purpose: #{NetworkConfig::PURPOSES.join(' or ')}"
+    option :zone,       type: :string,  desc: 'Firewall zone by name (Network 9+)'
+    def vlan_set(name)
+      update_vlan(name)
+    end
+
+    desc 'vlan-delete NAME', 'Delete a network (VLAN)'
+    map 'vlan-delete' => :vlan_delete
+    long_desc <<~DESC
+      Deletes a network. Refuses while any wireless network or pinned client
+      still uses it, and lists them so they can be moved first. Asks for
+      confirmation on an interactive terminal; pass --yes to skip that, which
+      is also required when there is no terminal to ask.
+    DESC
+    option :device, aliases: '-d', type: :string,  desc: 'Device name (uses default if omitted)'
+    option :yes,    aliases: '-y', type: :boolean, default: false, desc: 'Delete without asking'
+    def vlan_delete(name)
+      delete_vlan(name)
+    end
+
+    desc 'pins', 'Show clients pinned to a network (VLAN)'
+    long_desc <<~DESC
+      Every client with a network override — a client the controller puts on
+      a chosen network whatever SSID or port it arrives through. Set one with
+      `pin`, clear it with `unpin`.
+    DESC
+    output_options anon: 'Replace client names, MAC addresses, and IP addresses with friendly placeholders'
+    option :sort, aliases: '-s', type: :string, desc: 'Sort by column name (or a unique fragment of one)'
+    def pins
+      show_pins(anon: Anonymizer.new(options[:anon]))
+    end
+
+    desc 'pin CLIENT', 'Pin a client to a network (VLAN)'
+    long_desc <<~DESC
+      Puts a client on a chosen network whatever SSID or switch port it
+      connects through — UniFi's "network override" on the client. CLIENT is
+      a name, hostname, MAC address, or IP address; a name may be a unique
+      part of one. Give the target as --vlan N or --network NAME.
+
+        ui-manage pin "Living Room TV" --vlan 30
+
+        ui-manage pin aa:bb:cc:dd:ee:ff --network IoT
+
+      The change applies the next time the client connects. A wired client
+      only lands on the VLAN if its switch port carries that VLAN, which
+      means a trunk (or "all") port profile rather than a single native VLAN.
+    DESC
+    option :device,  aliases: '-d', type: :string,  desc: 'Device name (uses default if omitted)'
+    option :vlan,    type: :numeric, desc: 'VLAN tag of the network to pin to (0 for the untagged network)'
+    option :network, type: :string,  desc: 'Name of the network to pin to'
+    def pin(client)
+      pin_client(client)
+    end
+
+    desc 'unpin CLIENT', "Remove a client's network pin"
+    long_desc <<~DESC
+      Clears the network override on a client, so it lands on whatever
+      network its SSID or switch port provides. CLIENT is a name, hostname,
+      MAC address, or IP address, as for `pin`.
+    DESC
+    option :device, aliases: '-d', type: :string, desc: 'Device name (uses default if omitted)'
+    def unpin(client)
+      unpin_client(client)
+    end
+
+    desc 'wlan-set SSID', "Change a wireless network's settings"
+    map 'wlan-set' => :wlan_set
+    long_desc <<~DESC
+      Changes one or more settings on an existing wireless network, leaving
+      the rest as they are. SSID is the network's full name or a unique part
+      of it.
+
+      To turn an SSID into a proper guest network, give it a guest network to
+      land on (see `vlan-create --guest`), mark it guest, and isolate its
+      clients from each other:
+
+        ui-manage wlan-set ZombieGuest --network Guest --guest --isolate
+
+      --network is the LAN network (VLAN) the SSID's clients join. --guest
+      applies the controller's guest policy (and hotspot portal, if one is
+      configured). --isolate stops clients on the SSID from seeing each
+      other (client/L2 isolation).
+
+      --security is open, wpa2, wpa3, or wpa2-wpa3 (both, for a mix of old
+      and new clients). WPA3 needs protected management frames, so it sets
+      --pmf required (wpa2-wpa3 sets optional) unless --pmf is given too.
+
+      --passphrase takes the new passphrase, or "-" to read it from a hidden
+      prompt (or stdin when piped) so it stays out of shell history:
+
+        ui-manage wlan-set Zombieland --passphrase -
+
+      --band is 2g, 5g, 6g, all, or a comma-separated combination. --hidden
+      and --no-hidden control whether the SSID is broadcast; --enabled and
+      --no-enabled turn the network on and off; --rename changes the SSID.
+    DESC
+    option :device,     aliases: '-d', type: :string,  desc: 'Device name (uses default if omitted)'
+    option :rename,     type: :string,  desc: 'New SSID'
+    option :network,    type: :string,  desc: 'Network (VLAN) the clients join, by name'
+    option :guest,      type: :boolean, desc: 'Treat as a guest network (--no-guest to clear)'
+    option :isolate,    type: :boolean, desc: 'Isolate clients from each other (--no-isolate to allow)'
+    option :security,   type: :string,  desc: "Security: #{WlanConfig::SECURITY.keys.join(', ')}"
+    option :passphrase, type: :string,  desc: 'New passphrase, or "-" to read it from a hidden prompt/stdin'
+    option :pmf,        type: :string,  desc: "Protected management frames: #{WlanConfig::PMF_MODES.join(', ')}"
+    option :band,       type: :string,  desc: 'Band: 2g, 5g, 6g, all, or a comma-separated combination'
+    option :hidden,     type: :boolean, desc: 'Hide the SSID (--no-hidden to broadcast it)'
+    option :enabled,    type: :boolean, desc: 'Turn the network on (--no-enabled turns it off)'
+    def wlan_set(ssid)
+      update_wlan(ssid)
+    end
+
+    # -------------------------------------------------------------------------
     # Report
     # -------------------------------------------------------------------------
 
@@ -920,11 +1105,7 @@ module UiManage
     # Resolves an --api-key value: "-" reads the key from a hidden prompt (or
     # stdin when piped) so it never appears in shell history or `ps` output.
     def read_api_key(value)
-      return validated_api_key(value) unless value == '-'
-
-      key = ($stdin.tty? ? IO.console.getpass('API key: ') : $stdin.gets.to_s).chomp
-      abort 'No API key provided.' if key.empty?
-      validated_api_key(key)
+      validated_api_key(read_secret(value, prompt: 'API key: '))
     end
 
     # A control character in the key would be rejected by the transport anyway;
@@ -944,7 +1125,11 @@ module UiManage
         '--severity' => Audit::Severity::ORDER,
         '--fail-on'  => Audit::Severity::ORDER,
         '--explain'  => Audit::Registry.all.map(&:id),
-        '--format'   => Audit::Renderer::FORMATS
+        '--format'   => Audit::Renderer::FORMATS,
+        '--security' => WlanConfig::SECURITY.keys,
+        '--pmf'      => WlanConfig::PMF_MODES,
+        '--band'     => WlanConfig::BANDS + ['all'],
+        '--purpose'  => NetworkConfig::PURPOSES
       }
     end
 

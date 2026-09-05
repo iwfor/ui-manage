@@ -356,9 +356,80 @@ Dropped deliberately:
 
 ---
 
+## Phase 8 — Management commands  ✅ done (2026-09-05)
+
+The first writes beyond `power --on/--off`: networks (VLANs), the clients
+pinned to them, and wireless network settings.
+
+- [x] `Client` write layer: `create_network`, `update_network`,
+      `delete_network`, `update_wlan`, `update_known_client`, all through one
+      `network_write` that drops the response cache afterwards
+- [x] `firewall_zones` — `GET /v2/api/site/{site}/firewall/zone`, optional
+      (Network 9+ only); `V2_ENDPOINTS` for future v2 reads
+- [x] `NetworkConfig` — subnet normalisation, default and explicit DHCP
+      pools, VLAN/purpose validation, full record for a create and partial
+      attributes for an update
+- [x] `WlanConfig` — security modes mapped onto the same fields
+      `WlanSecurity` reads back, bands, PMF, passphrase rules
+- [x] `FirewallZone` — shared by the `vlans` view (new Zone column), the
+      `wlan_guest_network` check (a Hotspot-zone network is guest treatment),
+      and the management commands
+- [x] `vlan-create`, `vlan-set`, `vlan-delete`
+- [x] `pin`, `unpin`, `pins` — the per-client network override
+- [x] `wlan-set`
+- [x] 55 new tests, plus `perform` in the test harness for asserting on what
+      a write sent (and that a refusal sent nothing)
+- [x] README: "Managing the network"
+
+Decisions taken along the way:
+- Every refusal happens before the write. Name resolution is exact-or-unique
+  and never matches a WAN network; values are validated in `NetworkConfig` /
+  `WlanConfig` first; a VLAN tag or name already in use is refused; and
+  `vlan-delete` refuses while a WLAN or pinned client still references the
+  network. The tests assert that each refusal made no non-GET request.
+- Updates send only the fields given. The controller merges a partial PUT,
+  and resending the whole record would write stale values back over anything
+  changed elsewhere in the meantime.
+- `--guest` on `vlan-create` means the Hotspot zone on a zone-based
+  controller and the legacy `guest` purpose on an older one, because those
+  are the two mechanisms that actually block a guest network from the LAN.
+  It does *not* also set "Isolate Network": the UDM Pro answers
+  `api.err.NetworkIsolationAppliedOnNonCorporateNetwork` to that, because it
+  rewrites the purpose of a Hotspot-zone network to `guest` itself. (An
+  earlier draft sent both, and the first live create failed on it.)
+- `NetworkConfig.build` treats an unset flag (nil) as the LAN default. The
+  first live create came out with DHCP off because the CLI passed the
+  unset `--dhcp` flag straight through and it overrode the default.
+- `WlanSecurity.generation` now checks transition mode before WPA3-only.
+  The controller sets `wpa3_support` alongside `wpa3_transition`, so an
+  SSID still admitting WPA2 clients was labelled WPA3-PSK.
+- The passphrase is never echoed: `wlan-set` reports "passphrase: updated",
+  and `--passphrase -` reads it from a hidden prompt or stdin.
+
+Verified against the UDM Pro (Network 10.6) on 2026-09-05 with a throwaway
+VLAN 4001: `POST /rest/networkconf` with `firewall_zone_id` puts the network
+in the zone (the zone's `network_ids` follows without a separate zone
+update); partial `PUT /rest/networkconf/{id}` merges; `DELETE` removes it.
+`PUT /rest/wlanconf/{id}` and `PUT /rest/user/{id}` are the same REST
+family and were not separately exercised — the first real `wlan-set` and
+`pin` will confirm them.
+
+Deferred:
+- [ ] `wlan-create` / `wlan-delete`. A new WLAN needs `ap_group_ids` (from
+      `/v2/api/site/{site}/apgroups`) and `usergroup_id`, neither read yet.
+- [ ] Switch-port VLAN assignment (`port_overrides[].portconf_id` from
+      `/rest/portconf`) — the other half of pinning a wired device, and the
+      untrusted-port check deferred in Phase 4 would read the same data.
+- [ ] Whether `is_guest` on a WLAN does anything beyond the hotspot portal
+      on a zone-based controller; the README describes it as the
+      controller's guest policy, which is what it is documented as.
+
+---
+
 ## Still open
 
 Nothing blocking.
+
 
 - [x] Verified against the UDM Pro (UniFi OS 5.1, Network 10.6), 2026-09-05:
       `/cmd/sitemgr get-admins` answers 400 `api.err.Invalid`, and

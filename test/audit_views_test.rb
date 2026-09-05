@@ -329,6 +329,14 @@ module UiManage
       assert_includes render(:vlans, routes, all: true), 'WAN'
     end
 
+def test_vlans_show_the_firewall_zone_when_the_controller_has_zones
+  routes = { NETWORK_PATH => [{ "_id" => "g", "name" => "Guest", "vlan" => 20, "purpose" => "corporate" }],
+             "firewall/zone" => [{ "name" => "Hotspot", "zone_key" => "hotspot", "network_ids" => ["g"] }] }
+
+  assert_match(/Guest\s+\|\s+20\s+\|.*\|\s+Hotspot\s+\|/, render(:vlans, routes))
+  assert_match(/Guest\s+\|\s+20\s+\|.*\|\s+-\s+\|\s+YES/, render(:vlans, NETWORK_PATH => routes[NETWORK_PATH], "firewall/zone" => 404))
+end
+
     def test_vpn_names_the_auth_method_without_printing_the_key
       out = render(:vpn, NETWORK_PATH => [
                      { 'name' => 'Road Warrior', 'purpose' => 'remote-user-vpn',

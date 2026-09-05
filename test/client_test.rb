@@ -472,5 +472,52 @@ module UiManage
 
       assert_equal 'auto', device['port_overrides'].first['poe_mode']
     end
+
+# --- writes ---------------------------------------------------------------
+
+def test_create_network_posts_and_returns_the_stored_record
+  transport = FakeTransport.new { FakeTransport.ok([{ "_id" => "n1", "name" => "IoT" }]) }
+  net = build_client(transport).create_network("name" => "IoT")
+
+  assert_equal "n1", net["_id"]
+  assert_equal :post, transport.requests.first.method
+  assert_equal "/proxy/network/api/s/default/rest/networkconf", transport.requests.first.path
+  assert_equal({ "name" => "IoT" }, transport.requests.first.json_body)
+end
+
+def test_update_and_delete_hit_the_record_by_id_and_drop_the_cache
+  transport = FakeTransport.new { FakeTransport.ok([]) }
+  client    = build_client(transport)
+  client.networks
+  client.update_network("n1", "name" => "Renamed")
+  client.networks
+  client.delete_network("n1")
+  client.networks
+
+  methods = transport.requests.map { |r| [r.method, r.path.split("/").last(2).join("/")] }
+  assert_equal [[:get, "rest/networkconf"], [:put, "networkconf/n1"], [:get, "rest/networkconf"],
+                [:delete, "networkconf/n1"], [:get, "rest/networkconf"]], methods
+end
+
+def test_wlan_and_known_client_updates_are_partial_puts
+  transport = FakeTransport.new { FakeTransport.ok([]) }
+  client    = build_client(transport)
+  client.update_wlan("w1", "is_guest" => true)
+  client.update_known_client("u1", "virtual_network_override_enabled" => true)
+
+  assert_equal "/proxy/network/api/s/default/rest/wlanconf/w1", transport.requests[0].path
+  assert_equal({ "is_guest" => true }, transport.requests[0].json_body)
+  assert_equal "/proxy/network/api/s/default/rest/user/u1", transport.requests[1].path
+  assert_equal :put, transport.requests[1].method
+end
+
+def test_firewall_zones_read_the_v2_endpoint_and_are_optional
+  transport = FakeTransport.new { |req| req.path.include?("firewall/zone") ? FakeTransport.ok([{ "zone_key" => "hotspot" }]) : FakeTransport.status(404) }
+  client    = build_client(transport)
+
+  assert_equal "hotspot", client.firewall_zones.first["zone_key"]
+  assert_equal "/proxy/network/v2/api/site/default/firewall/zone", transport.requests.first.path
+  assert_nil build_client(FakeTransport.new { FakeTransport.status(404) }).optional(:firewall_zones)
+end
   end
 end

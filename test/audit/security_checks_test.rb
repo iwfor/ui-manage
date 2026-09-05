@@ -64,6 +64,25 @@ module UiManage
         assert report.clean?
       end
 
+def test_a_guest_ssid_on_a_hotspot_zone_network_passes
+  report = audit_report(:wlan_guest_network,
+                        "wlanconf"      => [wlan("is_guest" => true, "networkconf_id" => "n1")],
+                        "networkconf"   => [{ "_id" => "n1", "name" => "Guest", "purpose" => "corporate" }],
+                        "firewall/zone" => [{ "name" => "Hotspot", "zone_key" => "hotspot", "network_ids" => ["n1"] }])
+
+  assert_empty report.findings
+end
+
+def test_a_guest_ssid_on_an_internal_zone_network_is_reported_with_the_zone
+  report = audit_report(:wlan_guest_network,
+                        "wlanconf"      => [wlan("is_guest" => true, "networkconf_id" => "n1")],
+                        "networkconf"   => [{ "_id" => "n1", "name" => "LAN", "purpose" => "corporate" }],
+                        "firewall/zone" => [{ "name" => "Internal", "zone_key" => "internal", "network_ids" => ["n1"] }])
+
+  assert_equal 1, report.findings.size
+  assert_equal "Internal", report.findings.first.evidence["zone"]
+end
+
       def test_a_non_guest_ssid_is_not_judged
         report = audit_report(:wlan_guest_network,
                               'wlanconf'    => [wlan('networkconf_id' => 'n1')],

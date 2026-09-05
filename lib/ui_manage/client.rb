@@ -69,6 +69,15 @@ module UiManage
     CORE_ENDPOINTS = %i[firewall_rules firewall_groups port_forwards networks
                         dhcp_leases devices sysinfo clients].freeze
 
+    # Network application v2 endpoints, site-scoped under V2_PREFIX. These
+    # answer with a bare list rather than the {meta, data} envelope, and none
+    # of them exists before Network 9, so all are optional.
+    V2_ENDPOINTS = {
+      # Zone-based firewall zones. Which zone a network sits in is what
+      # decides whether its clients can reach the other networks.
+      firewall_zones: '/firewall/zone'
+    }.freeze
+
     # UniFi OS console endpoints. These sit outside the Network application
     # proxy and return bare JSON rather than the {meta, data} envelope.
     OS_ENDPOINTS = {
@@ -79,6 +88,7 @@ module UiManage
     # EndpointUnavailable from any of these and records it in #degradations.
     OPTIONAL_ENDPOINTS = (
       (NETWORK_ENDPOINTS.keys - CORE_ENDPOINTS) +
+      V2_ENDPOINTS.keys +
       OS_ENDPOINTS.keys +
       %i[alarms events ips_events rogue_aps admins site_stats os_users]
     ).freeze
@@ -107,9 +117,18 @@ module UiManage
       define_method(name) { network_get(path) }
     end
 
+    V2_ENDPOINTS.each do |name, path|
+      define_method(name) { v2_get(path) }
+    end
+
     OS_ENDPOINTS.each do |name, path|
       define_method(name) { os_get(path) }
     end
+
+    # Every client the controller has ever seen, with whatever the operator
+    # has pinned to it: a name, a fixed IP, a network override. The same
+    # endpoint `dhcp_leases` reads, under the name that fits that use.
+    def known_clients = dhcp_leases
 
     # Recent alarms: the system log at warning severity and above. Archived
     # alarms are excluded by default — an audit cares about what is still
@@ -210,6 +229,40 @@ module UiManage
       network_put("/rest/device/#{device['_id']}", body: { 'port_overrides' => overrides })
     end
 
+    # --- Networks (VLANs) ------------------------------------------------------
+
+    # Creates a network from a full attribute hash (see NetworkConfig.build)
+    # and returns the record the controller stored.
+    def create_network(attrs)
+      Array(network_create('/rest/networkconf', body: attrs)).first
+    end
+
+    # Changes only the given attributes of an existing network. The
+    # controller merges a partial update, so nothing else is resent — which
+    # also means nothing stale is written back over a concurrent change.
+    def update_network(id, attrs)
+      Array(network_put("/rest/networkconf/#{id}", body: attrs)).first
+    end
+
+    def delete_network(id)
+      network_delete("/rest/networkconf/#{id}")
+    end
+
+    # --- WLANs -----------------------------------------------------------------
+
+    def update_wlan(id, attrs)
+      Array(network_put("/rest/wlanconf/#{id}", body: attrs)).first
+    end
+
+    # --- Known clients ---------------------------------------------------------
+
+    # Changes the operator-set fields on a known client: its network
+    # override, fixed IP, name. Identified by the record's own id rather than
+    # its MAC, which is how /rest/user is keyed.
+    def update_known_client(id, attrs)
+      Array(network_put("/rest/user/#{id}", body: attrs)).first
+    end
+
     def login
       response = request(:post, '/api/auth/login',
                          body: { username: @username, password: @password })
@@ -259,6 +312,12 @@ module UiManage
       end
     end
 
+    def v2_get(path)
+      cached(:v2, path, {}) do
+        send_api(:get, "#{V2_PREFIX}/#{@site}#{path}", endpoint: path)
+      end
+    end
+
     # A Network application endpoint that is not site-scoped.
     def controller_get(path)
       cached(:controller, path, {}) do
@@ -293,8 +352,15 @@ module UiManage
       end
     end
 
-    def network_put(path, body:)
-      result = send_api(:put, network_path(path), body: body, endpoint: path)
+    # Writes. Each drops the response cache afterwards, so a read that
+    # follows sees the controller's new state rather than the memoized old
+    # one.
+    def network_put(path, body:)    = network_write(:put, path, body: body)
+    def network_create(path, body:) = network_write(:post, path, body: body)
+    def network_delete(path)        = network_write(:delete, path)
+
+    def network_write(method, path, body: nil)
+      result = send_api(method, network_path(path), body: body, endpoint: path)
       clear_cache!
       result
     end

@@ -27,9 +27,12 @@ module UiManage
       end
     end
 
+    # Transition mode is checked first: the controller sets wpa3_support
+    # alongside wpa3_transition, and an SSID still admitting WPA2 clients
+    # must not read as WPA3-only.
     def generation(wlan)
-      return 'WPA3' if wlan['wpa3_support'] || wlan['wpa3_enhanced_192']
       return 'WPA3/WPA2' if wlan['wpa3_transition']
+      return 'WPA3' if wlan['wpa3_support'] || wlan['wpa3_enhanced_192']
 
       case wlan['wpa_mode'].to_s.downcase
       when 'wpa1', 'wpa' then 'WPA1'
