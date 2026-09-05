@@ -37,9 +37,11 @@ module UiManage
         { '_id' => 'u1', 'mac' => 'aa:bb:cc:dd:ee:01', 'name' => 'Living Room TV', 'is_wired' => false,
           'last_ip' => '192.168.1.50', 'virtual_network_override_enabled' => false },
         { '_id' => 'u2', 'mac' => 'aa:bb:cc:dd:ee:02', 'hostname' => 'printer', 'is_wired' => true,
-          'last_ip' => '192.168.1.51', 'virtual_network_override_enabled' => true,
+          'last_ip' => '192.168.1.51', 'ip' => '192.168.1.51',
+          'virtual_network_override_enabled' => true,
           'virtual_network_override_id' => 'iot', 'last_seen' => Time.now.to_i },
-        { '_id' => 'u3', 'mac' => 'aa:bb:cc:dd:ee:03', 'name' => 'Living Room Lamp', 'is_wired' => false }
+        { '_id' => 'u3', 'mac' => 'aa:bb:cc:dd:ee:03', 'name' => 'Living Room Lamp', 'is_wired' => false,
+          'use_fixedip' => true, 'fixed_ip' => '192.168.1.60', 'network_id' => 'lan' }
       ]
     end
 
@@ -299,6 +301,102 @@ module UiManage
       out = render(:pins, routes, anon: true)
       refute_includes out, 'aa:bb:cc:dd:ee:02'
       refute_includes out, 'printer'
+    end
+
+    # --- reserve / unreserve --------------------------------------------------
+
+    def test_reserve_sets_a_fixed_ip_on_the_network_holding_it
+      out, requests, status = perform(:reserve, routes, args: ['Living Room TV', '192.168.30.10'])
+
+      assert_equal 0, status
+      put = writes(requests).first
+      assert_equal :put, put.method
+      assert_match %r{/rest/user/u1\z}, put.path
+      assert_equal({ 'use_fixedip' => true, 'fixed_ip' => '192.168.30.10', 'network_id' => 'iot' }, put.json_body)
+      assert_includes out, "Reserved 192.168.30.10 for 'Living Room TV' (aa:bb:cc:dd:ee:01) on 'IoT'"
+    end
+
+def test_reserve_reports_the_address_it_replaced
+out, requests, status = perform(:reserve, routes, args: ["Living Room Lamp", "192.168.1.61"])
+
+assert_equal 0, status
+assert_equal "192.168.1.61", writes(requests).first.json_body["fixed_ip"]
+assert_includes out, "(was 192.168.1.60)"
+end
+
+    def test_reserve_refuses_an_address_outside_every_network
+      out, requests, status = perform(:reserve, routes, args: ['printer', '172.16.0.5'])
+
+      assert_equal 1, status
+      assert_empty writes(requests)
+      assert_includes out, 'not inside any of your networks'
+    end
+
+    def test_reserve_refuses_an_address_that_is_not_an_ipv4_address
+      out, requests, status = perform(:reserve, routes, args: ['printer', 'garbage'])
+
+      assert_equal 1, status
+      assert_empty writes(requests)
+      assert_includes out, 'not an IPv4 address'
+    end
+
+    def test_reserve_refuses_the_gateway_network_and_broadcast_addresses
+      %w[192.168.30.1 192.168.30.0 192.168.30.255].each do |address|
+        out, requests, status = perform(:reserve, routes, args: ['printer', address])
+
+        assert_equal 1, status, address
+        assert_empty writes(requests), address
+        assert_match(/gateway address|network address|broadcast address/, out)
+      end
+    end
+
+    def test_reserve_refuses_an_address_another_client_already_reserves
+      out, requests, status = perform(:reserve, routes, args: ['Living Room TV', '192.168.1.60'])
+
+      assert_equal 1, status
+      assert_empty writes(requests)
+      assert_includes out, 'already reserved for'
+      assert_includes out, 'aa:bb:cc:dd:ee:03'
+    end
+
+    def test_reserve_leaves_an_unchanged_reservation_alone
+      out, requests, = perform(:reserve, routes, args: ['Living Room Lamp', '192.168.1.60'])
+
+      assert_empty writes(requests)
+      assert_includes out, 'already reserves'
+    end
+
+    def test_reserve_warns_when_another_client_holds_the_address_dynamically
+      out, requests, = perform(:reserve, routes, args: ['Living Room TV', '192.168.1.51'])
+
+      refute_empty writes(requests)
+      assert_includes out, 'dynamic lease'
+      assert_includes out, 'printer'
+    end
+
+    def test_reserve_uses_the_named_network_and_checks_the_address_against_it
+      out, requests, status = perform(:reserve, routes, args: ['printer', '192.168.30.10'], network: 'Default')
+
+      assert_equal 1, status
+      assert_empty writes(requests)
+      assert_includes out, "outside 'Default'"
+    end
+
+    def test_unreserve_clears_the_fixed_ip
+      out, requests, status = perform(:unreserve, routes, args: ['Living Room Lamp'])
+
+      assert_equal 0, status
+      put = writes(requests).first
+      assert_match %r{/rest/user/u3\z}, put.path
+      assert_equal({ 'use_fixedip' => false }, put.json_body)
+      assert_includes out, 'Released 192.168.1.60'
+    end
+
+    def test_unreserve_on_a_client_without_one_changes_nothing
+      out, requests, = perform(:unreserve, routes, args: ['printer'])
+
+      assert_empty writes(requests)
+      assert_includes out, 'no reserved address'
     end
 
     # --- wlan-set -------------------------------------------------------------

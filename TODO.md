@@ -426,6 +426,40 @@ Deferred:
 
 ---
 
+## Phase 9 — DHCP reservations  ✅ done (2026-09-05)
+
+Setting the other half of what `dhcp --leases` and the `dhcp_reservation`
+check already read: a client's fixed address.
+
+- [x] `reserve CLIENT IP` / `unreserve CLIENT`, on the same
+      `PUT /rest/user/{id}` as `pin` (`use_fixedip`, `fixed_ip`,
+      `network_id`)
+- [x] The address picks its own network: the LAN whose subnet contains it,
+      or `--network NAME` when subnets overlap
+- [x] Refusals before the write, as in Phase 8: a non-IPv4 address, an
+      address outside every network (or outside the named one), the
+      gateway, network, and broadcast addresses, and an address another
+      client already reserves
+- [x] A client currently holding the address on a dynamic lease is a note,
+      not a refusal — the reservation is right, the collision clears when
+      that lease expires
+- [x] Address validation reuses `NetworkConfig.ipv4`
+- [x] 11 new tests; README: "Reserving a static IP address"
+
+Decisions taken along the way:
+- `unreserve` sends only `use_fixedip: false` and leaves `fixed_ip` on the
+  record, which is what the controller's own UI does; every reader here
+  (the `dhcp --leases` view, the `dhcp_reservation` check) requires the
+  flag beside the address, so nothing sees a stale reservation.
+- `network_id` is sent with the address. The controller stores a
+  reservation against a network, and `dhcp_reservation` reads that field
+  to tell an out-of-range reservation from a valid one.
+
+Not verified live yet: `PUT /rest/user/{id}` with the fixed-IP fields —
+the same request `pin` makes, still unexercised against the UDM Pro.
+
+---
+
 ## Still open
 
 Nothing blocking.

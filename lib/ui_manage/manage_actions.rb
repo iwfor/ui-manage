@@ -1,8 +1,10 @@
+require 'ipaddr'
+
 module UiManage
   # The commands that change the controller: networks (VLANs), the clients
-  # pinned to them, and wireless network settings. Kept out of CLI like
-  # AuditViews, so cli.rb holds the command definitions and this holds what
-  # they do.
+  # pinned to them and the addresses reserved for them, and wireless network
+  # settings. Kept out of CLI like AuditViews, so cli.rb holds the command
+  # definitions and this holds what they do.
   #
   # Every action resolves its target by name first and refuses on ambiguity
   # — a write that lands on the wrong network is worse than one that asks
@@ -171,6 +173,55 @@ module UiManage
       end
     end
 
+    # --- static DHCP reservations ---------------------------------------------
+
+    def reserve_client(pattern, address)
+      client = resolve_client
+      with_client(client) do |c|
+        ip   = NetworkConfig.ipv4(address, what: 'IP address')
+        user = find_known_client(c.known_clients, pattern)
+        net  = network_for_address(c.networks, ip)
+
+        if user['use_fixedip'] && user['fixed_ip'] == ip.to_s && user['network_id'] == net['_id']
+          say "#{client_label(user)} already reserves #{ip}."
+          return
+        end
+        refuse_unavailable_address(c.known_clients, user, ip, net)
+
+        c.update_known_client(user['_id'], 'use_fixedip' => true,
+                                           'fixed_ip'    => ip.to_s,
+                                           'network_id'  => net['_id'])
+
+        was = user['use_fixedip'] && user['fixed_ip']
+        say "Reserved #{ip} for #{client_label(user)} on '#{net['name']}'#{was ? " (was #{was})" : ''}."
+        say 'The client keeps its current address until its lease expires — reconnect it to take the new one now.'
+        if (holder = dynamic_holder(c.known_clients, user, ip))
+          say "Note: #{client_label(holder)} currently holds #{ip} on a dynamic lease; " \
+              'the two collide until that lease is released.'
+        end
+      end
+    rescue NetworkConfig::Invalid => e
+      abort "Error: #{e.message}"
+    end
+
+    def unreserve_client(pattern)
+      client = resolve_client
+      with_client(client) do |c|
+        user = find_known_client(c.known_clients, pattern)
+        unless user['use_fixedip']
+          say "#{client_label(user)} has no reserved address."
+          return
+        end
+
+        # Only the switch is cleared, as the controller's own UI does: the
+        # address stays on the record, so re-reserving it is one flag away,
+        # and nothing reads `fixed_ip` without `use_fixedip` beside it.
+        c.update_known_client(user['_id'], 'use_fixedip' => false)
+        say "Released #{user['fixed_ip']} from #{client_label(user)}; " \
+            'it takes an address from the DHCP pool from its next lease.'
+      end
+    end
+
     # --- wireless networks ----------------------------------------------------
 
     def update_wlan(ssid)
@@ -228,6 +279,56 @@ module UiManage
       net = nets.find { |n| n['purpose'] != 'wan' && (n['vlan'] ? n['vlan'].to_i == id : id.zero?) }
       abort "No network uses VLAN #{id}. Run `ui-manage vlans` to see them." unless net
       net
+    end
+
+    # The LAN network a reserved address belongs to: the one whose subnet
+    # contains it, since the controller stores a reservation against a
+    # network. --network names one when the address is inside more than one.
+    def network_for_address(nets, ip)
+      if options[:network]
+        net = find_network(nets, options[:network])
+        subnet = subnet_of(net)
+        abort "#{ip} is outside '#{net['name']}' (#{net['ip_subnet']})." unless subnet&.include?(ip)
+        return net
+      end
+
+      matches = nets.select { |n| n['purpose'] != 'wan' && subnet_of(n)&.include?(ip) }
+      case matches.size
+      when 0 then abort "#{ip} is not inside any of your networks. Run `ui-manage vlans` to see their subnets."
+      when 1 then matches.first
+      else
+        names = matches.map { |n| n['name'] }.join(', ')
+        abort "#{ip} is inside more than one network (#{names}) — name one with --network."
+      end
+    end
+
+    # An address the network cannot hand out, or has already promised to
+    # someone else. Refused before the write, like every other refusal here.
+    def refuse_unavailable_address(known, user, ip, net)
+      gateway = net['ip_subnet'].to_s.split('/').first
+      abort "#{ip} is the gateway address of '#{net['name']}'." if ip.to_s == gateway
+
+      if (subnet = subnet_of(net))
+        range = subnet.to_range
+        abort "#{ip} is the network address of #{net['ip_subnet']}."   if ip == range.first && range.first != range.last
+        abort "#{ip} is the broadcast address of #{net['ip_subnet']}." if ip == range.last  && range.first != range.last
+      end
+
+      taken = known.find { |u| u['_id'] != user['_id'] && u['use_fixedip'] && u['fixed_ip'] == ip.to_s }
+      abort "#{ip} is already reserved for #{client_label(taken)}." if taken
+    end
+
+    # Another client sitting on the address right now, from the leases the
+    # controller reports — a collision the reservation will not resolve on
+    # its own, so it is worth saying rather than refusing.
+    def dynamic_holder(known, user, ip)
+      known.find { |u| u['_id'] != user['_id'] && !u['use_fixedip'] && u['ip'] == ip.to_s }
+    end
+
+    def subnet_of(net)
+      IPAddr.new(net['ip_subnet'] || net['subnet'] || '')
+    rescue IPAddr::Error
+      nil
     end
 
     def find_wlan(wlans, pattern)

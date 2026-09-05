@@ -830,7 +830,8 @@ module UiManage
     end
 
     # -------------------------------------------------------------------------
-    # Management: networks (VLANs), client pinning, wireless settings
+    # Management: networks (VLANs), client pinning and reservations,
+    # wireless settings
     # -------------------------------------------------------------------------
 
     desc 'vlan-create NAME', 'Create a network (VLAN)'
@@ -965,6 +966,44 @@ module UiManage
     option :device, aliases: '-d', type: :string, desc: 'Device name (uses default if omitted)'
     def unpin(client)
       unpin_client(client)
+    end
+
+    desc 'reserve CLIENT IP', 'Reserve a static IP address for a client (DHCP)'
+    long_desc <<~DESC
+      Gives a client the same address every time — UniFi's "Fixed IP" on the
+      client, handed out by the gateway's DHCP server, so the client stays on
+      DHCP and nothing has to be configured on the client itself. CLIENT is a
+      name, hostname, MAC address, or IP address, as for `pin`.
+
+        ui-manage reserve "Office Printer" 192.168.1.20
+
+        ui-manage reserve aa:bb:cc:dd:ee:ff 192.168.30.10
+
+      The address must be inside one of your networks, which is the network
+      the reservation is stored against; --network NAME picks it when more
+      than one subnet contains the address. An address reserved for another
+      client, the gateway's own address, and the network and broadcast
+      addresses are all refused before anything is sent.
+
+      The client keeps its current address until its lease expires, so
+      reconnect it to take the new one straight away. `ui-manage dhcp
+      --leases` lists every reservation.
+    DESC
+    option :device,  aliases: '-d', type: :string, desc: 'Device name (uses default if omitted)'
+    option :network, type: :string, desc: 'Name of the network the reservation belongs to'
+    def reserve(client, ip)
+      reserve_client(client, ip)
+    end
+
+    desc 'unreserve CLIENT', "Release a client's reserved address"
+    long_desc <<~DESC
+      Clears the fixed IP on a client, so it takes an ordinary address from
+      the DHCP pool again from its next lease. CLIENT is a name, hostname,
+      MAC address, or IP address, as for `reserve`.
+    DESC
+    option :device, aliases: '-d', type: :string, desc: 'Device name (uses default if omitted)'
+    def unreserve(client)
+      unreserve_client(client)
     end
 
     desc 'wlan-set SSID', "Change a wireless network's settings"

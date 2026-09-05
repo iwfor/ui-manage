@@ -3,7 +3,8 @@
 A command-line tool for querying and managing a UniFi controller (e.g. a UDM
 Pro) over its REST API — device identity, gateway/WAN status, connected
 clients, switch ports, firewall rules, port forwards, DHCP, and system health
-to read; networks (VLANs), client pinning, and wireless settings to change.
+to read; networks (VLANs), client pinning, DHCP reservations, and wireless
+settings to change.
 
 ## Setup
 
@@ -71,6 +72,7 @@ Run `bin/ui-manage help` for the full command list, or
 | `vlans` | Networks and VLANs with their segmentation settings and firewall zone |
 | `vlan-create NAME` / `vlan-set NAME` / `vlan-delete NAME` | Create, change, and delete networks (VLANs) |
 | `pins` / `pin CLIENT` / `unpin CLIENT` | Pin a client to a network (VLAN) whatever it connects through |
+| `reserve CLIENT IP` / `unreserve CLIENT` | Reserve a static DHCP address for a client, or release it |
 | `wlan-set SSID` | Change a wireless network: network/VLAN, guest, isolation, security, passphrase, band |
 | `vpn` | VPN servers and site-to-site tunnels |
 | `routes` | Static routes and dynamic DNS entries |
@@ -162,6 +164,27 @@ network whatever SSID or switch port it arrives through, from its next
 connection. A wired client only lands on the VLAN if its switch port carries
 it (a trunk or "all" port profile rather than a single native VLAN). A client
 may be given by name, hostname, MAC address, or IP address.
+
+### Reserving a static IP address
+
+```
+bin/ui-manage reserve "Office Printer" 192.168.1.20
+bin/ui-manage reserve aa:bb:cc:dd:ee:ff 192.168.30.10 --network IoT
+bin/ui-manage unreserve "Office Printer"
+bin/ui-manage dhcp --leases            # every reservation and dynamic lease
+```
+
+A reservation is UniFi's per-client "Fixed IP": the gateway hands the client
+the same address every time, so the client stays on DHCP and nothing has to
+be configured on the client itself. The address must be inside one of your
+networks — that is the network the reservation is stored against, and
+`--network NAME` picks it if more than one subnet contains the address.
+
+An address already reserved for another client, the gateway's own address,
+and a network or broadcast address are all refused before anything is sent;
+if another client is currently holding the address on a dynamic lease, the
+reservation is made and the collision reported. The client keeps its current
+address until its lease expires, so reconnect it to take the new one now.
 
 ### Wireless networks
 
