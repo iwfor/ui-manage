@@ -90,9 +90,14 @@ module UiManage
       assert_includes render(:wlans, { WLAN_PATH => [wlan('name' => 'SmithFamily')] }, anon: true), 'Network-1'
       refute_includes render(:wlans, { WLAN_PATH => [wlan('name' => 'SmithFamily')] }, anon: true), 'SmithFamily'
 
-      admins = render(:admins, { 'sitemgr' => [{ 'name' => 'alice', 'email' => 'alice@corp.test' }] }, anon: true)
+      admins = render(:admins, { 'stat/admin' => [{ 'name' => 'alice', 'email' => 'alice@corp.test' }] }, anon: true)
       refute_includes admins, 'alice'
       refute_includes admins, 'alice@corp.test'
+
+      as_json = render(:admins, { 'stat/admin' => [{ 'name' => 'alice', 'email' => 'alice@corp.test',
+                                                    'ubic_name' => 'alice@corp.test' }] }, anon: true, json: true)
+      refute_includes as_json, 'alice'
+      assert_includes as_json, 'Person-1'
 
       firmware = render(:firmware, { 'stat/device' => [{ 'name' => 'AP-Garage' }] }, anon: true)
       refute_includes firmware, 'AP-Garage'
@@ -112,7 +117,7 @@ module UiManage
     end
 
     def test_a_missing_endpoint_reports_the_controller_version
-      out = render(:threats, 'ips/event' => 404)
+      out = render(:threats, 'system-log' => 404, 'ips/event' => 404)
 
       assert_includes out, 'unavailable'
       assert_includes out, 'does not provide it'
@@ -158,7 +163,7 @@ module UiManage
     # --- admins ---------------------------------------------------------------
 
     def test_admins_report_two_factor_state
-      out = render(:admins, 'sitemgr' => [
+      out = render(:admins, 'stat/admin' => [
                      { 'name' => 'alice', 'x_has_totp' => true },
                      { 'name' => 'bob',   'x_has_totp' => false }
                    ])
@@ -169,13 +174,23 @@ module UiManage
 
     # A controller that does not report 2FA must not be read as "no 2FA".
     def test_missing_two_factor_information_reads_as_unknown
-      out = render(:admins, 'sitemgr' => [{ 'name' => 'alice', 'role' => 'admin' }])
+      out = render(:admins, 'stat/admin' => [{ 'name' => 'alice', 'role' => 'admin' }])
 
       assert_includes out, 'unknown'
     end
 
+    def test_the_role_column_is_the_account_s_role_on_this_site
+      out = render(:admins, 'stat/admin' => [
+                     { 'name' => 'alice', 'roles' => [{ 'site_name' => 'default', 'role' => 'readonly' }] },
+                     { 'name' => 'root',  'is_super' => true }
+                   ])
+
+      assert_match(/alice.*readonly/, out)
+      assert_match(/root.*super.*YES/, out)
+    end
+
     def test_an_api_key_that_cannot_read_admins_says_so
-      out = render(:admins, 'sitemgr' => 403)
+      out = render(:admins, 'stat/admin' => 403)
 
       assert_includes out, 'unavailable'
       refute_includes out, 'No administrators reported'
@@ -209,13 +224,13 @@ module UiManage
     # --- threats --------------------------------------------------------------
 
     def test_threat_severity_is_named_rather_than_numbered
-      out = render(:threats, 'ips/event' => [{ 'inner_alert_severity' => 1, 'catname' => 'trojan' }])
+      out = render(:threats, 'system-log' => [{ 'inner_alert_severity' => 1, 'catname' => 'trojan' }])
 
       assert_includes out, 'high'
     end
 
     def test_threats_filter_at_or_above_a_severity
-      routes = { 'ips/event' => [
+      routes = { 'system-log' => [
         { 'inner_alert_severity' => 1, 'catname' => 'severe' },
         { 'inner_alert_severity' => 3, 'catname' => 'minor' }
       ] }
@@ -227,14 +242,14 @@ module UiManage
 
     def test_an_unknown_severity_is_rejected
       assert_raises(Thor::Error) do
-        render(:threats, { 'ips/event' => [{ 'inner_alert_severity' => 1 }] }, severity: 'catastrophic')
+        render(:threats, { 'system-log' => [{ 'inner_alert_severity' => 1 }] }, severity: 'catastrophic')
       end
     end
 
     # --- events and alarms ----------------------------------------------------
 
     def test_events_filter_by_type
-      routes = { 'stat/event' => [
+      routes = { 'system-log' => [
         { 'key' => 'EVT_AD_Login', 'msg' => 'admin logged in' },
         { 'key' => 'EVT_LU_Connected', 'msg' => 'client connected' }
       ] }
@@ -246,13 +261,57 @@ module UiManage
 
     def test_event_times_render_from_epoch_milliseconds
       ms  = Time.new(2026, 3, 4, 5, 6, 0).to_i * 1000
-      out = render(:events, 'stat/event' => [{ 'key' => 'EVT_X', 'time' => ms }])
+      out = render(:events, 'system-log' => [{ 'key' => 'EVT_X', 'time' => ms }])
 
       assert_includes out, '2026-03-04 05:06'
     end
 
+    # The current system log carries a message template and the values to
+    # fill it with; the table shows the filled-in text.
+    def test_system_log_entries_render_their_message_template
+      entry = {
+        'key'         => 'CLIENT_CONNECTED_WIRELESS_2',
+        'title_raw'   => 'WiFi Client Connected',
+        'message_raw' => '{CLIENT} connected to {WLAN} on {DEVICE}.',
+        'parameters'  => { 'CLIENT' => { 'id' => 'aa:bb:cc:dd:ee:ff', 'name' => 'Thermostat' },
+                           'WLAN'   => { 'id' => 'w1', 'name' => 'Home' },
+                           'DEVICE' => { 'id' => '11:22:33:44:55:66', 'name' => 'AP-Garage' } },
+        'severity'    => 'LOW',
+        'subcategory' => 'MONITORING_WIFI',
+        'timestamp'   => Time.new(2026, 3, 4, 5, 6, 0).to_i * 1000
+      }
+      out = render(:events, 'system-log' => [entry])
+
+      assert_includes out, 'Thermostat connected to Home on AP-Garage.'
+      assert_includes out, 'WiFi Client Connected'
+      assert_includes out, 'MONITORING_WIFI'
+      assert_includes out, '2026-03-04 05:06'
+      assert_match(/\|\s+low\s+\|/, out)
+    end
+
+    def test_events_filter_by_type_matches_the_title_too
+      routes = { 'system-log' => [
+        { 'key' => 'ADMIN_ACCESS', 'title_raw' => 'Network Accessed', 'message_raw' => '{ADMIN} logged in' },
+        { 'key' => 'CLIENT_ROAMED', 'title_raw' => 'Client Roamed', 'message_raw' => 'roamed' }
+      ] }
+
+      assert_includes render(:events, routes, type: 'accessed'), 'Network Accessed'
+      refute_includes render(:events, routes, type: 'accessed'), 'Client Roamed'
+    end
+
+    def test_threat_severity_filter_understands_the_controller_s_levels
+      routes = { 'system-log' => [
+        { 'title_raw' => 'Severe', 'severity' => 'VERY_HIGH', 'message_raw' => 'x' },
+        { 'title_raw' => 'Minor',  'severity' => 'INFO',      'message_raw' => 'y' }
+      ] }
+      out = render(:threats, routes, severity: 'high')
+
+      assert_includes out, 'Severe'
+      refute_includes out, 'Minor'
+    end
+
     def test_alarms_report_an_empty_window_plainly
-      out = render(:alarms, 'stat/alarm' => [])
+      out = render(:alarms, 'system-log' => [])
 
       assert_includes out, 'No alarms in the last 24h'
     end

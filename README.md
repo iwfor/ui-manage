@@ -80,10 +80,22 @@ Run `bin/ui-manage help` for the full command list, or
 | `admins` | Site administrators, roles, and 2FA state |
 | `alarms` / `events` / `threats` | Outstanding alarms, the event log, and IDS/IPS detections |
 
-Most information commands support `--json` for raw output and
-`--anon`/`--anonymous` to replace MAC addresses, IP addresses, and other
-identifiers with realistic-looking placeholders — useful for sharing output
-(bug reports, screenshots) without exposing real network details.
+Every command that prints information — including `devices`, `policy`, and
+`report` — takes `-j/--json` for raw output (`report --json` is one document
+with a key per section; `audit --json` is shorthand for `--format json`).
+The information commands also take `--anon`/`--anonymous` to replace MAC
+addresses, IP addresses, and other identifiers with realistic-looking
+placeholders — useful for sharing output (bug reports, screenshots) without
+exposing real network details.
+
+`alarms`, `events`, and `threats` read the controller's system log, which
+is where Network application 9 moved all three (alarms are its entries at
+warning severity and above, threats its security category); on an older
+controller they fall back to the endpoints it replaced. `admins` reads the
+controller-wide administrator list and shows the accounts with a role on the
+site. No current endpoint reports whether an administrator has two-factor
+authentication, so that column reads `unknown` and the audit check that
+needs it is reported as not checked.
 
 Every command whose default output is a table supports `-s/--sort COLUMN`,
 where `COLUMN` is a column name or a unique fragment of one (case-insensitive):
@@ -263,13 +275,13 @@ it.
 
 ## Degraded checks
 
-Not every controller exposes every endpoint: the admin interface, IDS/IPS
-events, and several settings endpoints vary with the Network application
-version, and an API key generally has less access than a local account — it
-usually cannot read the admin list at all. Those endpoints are treated as
-optional. When one is refused (HTTP 401/403/404, or an `api.err.NoPermission`
-response), the reason is recorded and the checks that depend on it are
-reported as skipped rather than passing silently or failing the whole run.
+Not every controller exposes every endpoint: the administrator list, the
+system log, and several settings endpoints vary with the Network application
+version, and a credential may have less access than the account that created
+it. Those endpoints are treated as optional. When one is refused (HTTP
+401/403/404, or an `api.err.NoPermission` response), the reason is recorded
+and the checks that depend on it are reported as skipped rather than passing
+silently or failing the whole run.
 
 Core endpoints — devices, clients, networks, firewall rules, port forwards,
 DHCP — are not optional; a failure there is a real error.
@@ -355,7 +367,7 @@ the whole report.
 
 ```
 bundle install
-bundle exec rake test      # 377 tests, no network
+bundle exec rake test      # 404 tests, no network
 bundle exec rake catalog   # regenerate the check table above
 ```
 

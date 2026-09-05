@@ -7,10 +7,10 @@ module UiManage
     class AuthError < StandardError; end
 
     # Raised when the controller refuses or does not implement an endpoint:
-    # a credential without the necessary privilege (API keys typically cannot
-    # read the admin interface), or a Network application too old to expose
-    # it. Audit checks that depend on such an endpoint degrade to a "skipped"
-    # result rather than failing the whole run — see #optional.
+    # a credential without the necessary privilege (reading the administrator
+    # list, say), or a Network application too old to expose it. Audit
+    # checks that depend on such an endpoint degrade to a "skipped" result
+    # rather than failing the whole run — see #optional.
     class EndpointUnavailable < ApiError
       attr_reader :endpoint, :status
 
@@ -22,6 +22,10 @@ module UiManage
     end
 
     NETWORK_PREFIX = '/proxy/network/api/s'
+
+    # The Network application's newer API, which is where the system log
+    # (events, alarms, IDS/IPS detections) moved in version 9.
+    V2_PREFIX = '/proxy/network/v2/api/site'
 
     # HTTP statuses that mean "this credential or controller can't give you
     # this endpoint" rather than "the request was wrong".
@@ -68,8 +72,7 @@ module UiManage
     # UniFi OS console endpoints. These sit outside the Network application
     # proxy and return bare JSON rather than the {meta, data} envelope.
     OS_ENDPOINTS = {
-      os_system: '/api/system',
-      os_users:  '/api/users'
+      os_system: '/api/system'
     }.freeze
 
     # Endpoints an audit must be able to run without. #optional swallows an
@@ -77,8 +80,10 @@ module UiManage
     OPTIONAL_ENDPOINTS = (
       (NETWORK_ENDPOINTS.keys - CORE_ENDPOINTS) +
       OS_ENDPOINTS.keys +
-      %i[alarms events ips_events rogue_aps admins site_stats]
+      %i[alarms events ips_events rogue_aps admins site_stats os_users]
     ).freeze
+
+    attr_reader :site
 
     def initialize(host:, site: 'default', verify_ssl: false, username: nil, password: nil,
                    api_key: nil, verbose: false, timeout: nil, transport: nil)
@@ -106,20 +111,29 @@ module UiManage
       define_method(name) { os_get(path) }
     end
 
-    # Recent alarms. Archived alarms are excluded by default — an audit cares
-    # about what is still outstanding.
-    def alarms(within: 24, archived: false)
-      network_get('/stat/alarm', within: within, archived: archived)
+    # Recent alarms: the system log at warning severity and above. Archived
+    # alarms are excluded by default — an audit cares about what is still
+    # outstanding.
+    def alarms(within: 24, archived: false, limit: 500)
+      entries = system_log(within: within, limit: limit, severities: SystemLog::ALARM_SEVERITIES) do
+        network_get('/stat/alarm', within: within, archived: archived)
+      end
+      archived ? entries : entries.reject { |e| SystemLog.archived?(e) }
     end
 
     def events(within: 24, limit: 500)
-      network_get('/stat/event', within: within, _limit: limit)
+      system_log(within: within, limit: limit) do
+        network_get('/stat/event', within: within, _limit: limit)
+      end
     end
 
-    # IDS/IPS detections. Only present when Threat Management is licensed and
-    # enabled, so this is one of the endpoints most likely to degrade.
+    # IDS/IPS detections: the SECURITY category of the system log. Only
+    # present when Threat Management is licensed and enabled, so this is one
+    # of the endpoints most likely to degrade.
     def ips_events(within: 24, limit: 500)
-      network_get('/stat/ips/event', within: within, _limit: limit)
+      system_log(within: within, limit: limit, categories: SystemLog::THREAT_CATEGORIES) do
+        network_get('/stat/ips/event', within: within, _limit: limit)
+      end
     end
 
     # Access points seen nearby that this site does not manage.
@@ -127,12 +141,17 @@ module UiManage
       network_get('/stat/rogueap', within: within)
     end
 
-    # Site administrators. There is no stable REST path for these across
-    # versions; the sitemgr command is the form most controllers accept, and
-    # an API key generally cannot call it at all — which is precisely the
-    # case #optional exists to absorb.
+    # Site administrators. The controller lists every administrator it has,
+    # each with the sites they hold a role on, so this keeps the ones who can
+    # administer this site. A credential without the right to read the list
+    # answers 401/403 — the case #optional exists to absorb.
     def admins
-      network_post('/cmd/sitemgr', body: { cmd: 'get-admins' })
+      controller_get('/stat/admin').select { |a| AdminAccount.member_of?(a, @site) }
+    end
+
+    # UniFi OS console users, from the OS's own user service.
+    def os_users
+      os_get('/proxy/users/api/v2/users').fetch('data', [])
     end
 
     # Daily rollups for the site, used to compare current readings against a
@@ -240,6 +259,40 @@ module UiManage
       end
     end
 
+    # A Network application endpoint that is not site-scoped.
+    def controller_get(path)
+      cached(:controller, path, {}) do
+        send_api(:get, "/proxy/network/api#{path}", endpoint: path)
+      end
+    end
+
+    # One page of the system log, newest first, filtered to +categories+
+    # and +severities+ when given. Falls back to the block — the legacy
+    # endpoint the log replaced — on a controller too old to serve it, and
+    # reports both refusals if neither answers.
+    #
+    # Cached on the logical arguments rather than the request body, since the
+    # body carries the time of the call.
+    def system_log(within:, limit:, categories: nil, severities: nil)
+      cached(:system_log, 'all', [within, limit, categories, severities]) do
+        now  = (Time.now.to_f * 1000).to_i
+        body = { pageNumber: 0, pageSize: limit, timestampFrom: now - (within * 60 * 60 * 1000), timestampTo: now }
+        body[:categories] = categories if categories
+        body[:severities] = severities if severities
+
+        begin
+          send_api(:post, "#{V2_PREFIX}/#{@site}/system-log/all", body: body, endpoint: '/system-log/all')
+        rescue EndpointUnavailable => v2_error
+          begin
+            yield
+          rescue EndpointUnavailable => legacy_error
+            raise EndpointUnavailable.new("#{v2_error.message}; #{legacy_error.message}",
+                                          endpoint: legacy_error.endpoint, status: legacy_error.status)
+          end
+        end
+      end
+    end
+
     def network_put(path, body:)
       result = send_api(:put, network_path(path), body: body, endpoint: path)
       clear_cache!
@@ -319,6 +372,9 @@ module UiManage
 
       data = JSON.parse(response.body)
       return data unless envelope
+      # v2 endpoints answer with a bare list, or {data, page_number, ...}
+      # without a meta block; the legacy ones wrap everything in {meta, data}.
+      return data if data.is_a?(Array)
 
       if data.dig('meta', 'rc') == 'error'
         msg = data.dig('meta', 'msg').to_s
@@ -351,8 +407,10 @@ module UiManage
       nil
     end
 
+    # Legacy endpoints carry the reason in meta.msg, v2 ones in `message`.
     def error_message(body)
-      JSON.parse(body).dig('meta', 'msg') || 'unknown error'
+      parsed = JSON.parse(body)
+      parsed.dig('meta', 'msg') || parsed['message'] || 'unknown error'
     rescue StandardError
       'unknown error'
     end

@@ -1,5 +1,6 @@
 require 'thor'
 require 'io/console'
+require 'stringio'
 
 module UiManage
   class CLI < Thor
@@ -57,9 +58,15 @@ module UiManage
 
     # Declares the option trio shared by the information commands: --device,
     # --json, and — when a description is given — --anon/--anonymous.
-    def self.output_options(json: true, anon: nil)
+    # The one --json flag every command that prints information declares, so
+    # the flag reads the same everywhere.
+    def self.json_option
+      option :json, aliases: '-j', type: :boolean, desc: 'Output raw JSON', default: false
+    end
+
+    def self.output_options(anon: nil)
       option :device, aliases: '-d', type: :string,  desc: 'Device name (uses default if omitted)'
-      option :json,   aliases: '-j', type: :boolean, desc: 'Output raw JSON', default: false if json
+      json_option
       option :anon,   aliases: ['--anonymous'], type: :boolean, default: false, desc: anon if anon
     end
 
@@ -159,11 +166,14 @@ module UiManage
     end
 
     desc 'devices', 'List configured devices'
+    json_option
     option :sort, aliases: '-s', type: :string, desc: 'Sort by column name (or a unique fragment of one)'
     def devices
       config  = Config.new
-      devs    = config.devices
       default = config.default_device_name
+      devs    = config.devices.map { |d| device_summary(d, default: d['name'] == default) }
+
+      return Formatter.json(devs) if options[:json]
 
       if devs.empty?
         say 'No devices configured. Run `ui-manage login HOST` to add one.'
@@ -171,8 +181,8 @@ module UiManage
       end
 
       rows = devs.map do |d|
-        marker  = d['name'] == default ? '*' : ' '
-        auth    = d['encrypted_api_key'] ? 'api-key' : "password (#{d['username']})"
+        marker  = d['default'] ? '*' : ' '
+        auth    = d['auth'] == 'api-key' ? 'api-key' : "password (#{d['username']})"
         tls     = d['verify_ssl'] ? 'verified' : 'no verify'
         [marker, d['name'], d['host'], d['site'], auth, tls, policy_label(d['remote_access_expected'])]
       end
@@ -204,6 +214,7 @@ module UiManage
       without judging it.
     DESC
     option :device,        aliases: '-d', type: :string,  desc: 'Device name (uses default if omitted)'
+    json_option
     option :remote_access, type: :boolean, desc: 'Whether UniFi remote (cloud) access is expected on this network'
     option :unset,         type: :boolean, default: false, desc: 'Clear the policy back to "not configured"'
     def policy
@@ -223,6 +234,10 @@ module UiManage
         dev = config.update_device_policy(dev['name'], remote_access_expected: nil)
       elsif !options[:remote_access].nil?
         dev = config.update_device_policy(dev['name'], remote_access_expected: options[:remote_access])
+      end
+
+      if options[:json]
+        return Formatter.json('device' => dev['name'], 'remote_access_expected' => dev['remote_access_expected'])
       end
 
       Formatter.kv(
@@ -548,9 +563,10 @@ module UiManage
       whether two-factor authentication is configured.
 
       The 2FA column reads "unknown" when the controller does not report it —
-      an audit must not read a missing field as "no 2FA". API keys usually
-      cannot read the admin interface at all, in which case this command says
-      so rather than reporting an empty list.
+      an audit must not read a missing field as "no 2FA"; current UniFi OS
+      releases do not expose it over the API at all. A credential that is not
+      allowed to read the administrator list is told so rather than shown an
+      empty one.
     DESC
     output_options anon: 'Replace administrator names and email addresses with friendly placeholders'
     option :sort, aliases: '-s', type: :string, desc: 'Sort by column name (or a unique fragment of one)'
@@ -559,6 +575,14 @@ module UiManage
     end
 
     desc 'alarms', 'Show outstanding controller alarms'
+    long_desc <<~DESC
+      What the controller is warning about: system log entries at warning
+      severity and above — an internet connection down, devices fighting over
+      an IP address, a device that dropped off the network.
+
+      Entries the operator has archived are left out unless --archived is
+      given.
+    DESC
     output_options anon: 'Replace IP addresses, MAC addresses, and identifiers with friendly placeholders'
     window_options
     option :archived, type: :boolean, default: false, desc: 'Include alarms that have been archived'
@@ -569,8 +593,9 @@ module UiManage
 
     desc 'events', 'Show recent controller events'
     long_desc <<~DESC
-      Controller events over a time window. --type filters to events whose key
-      or message contains the given text (e.g. --type admin, --type disconnect).
+      The controller's system log over a time window. --type filters to
+      entries whose key, title, or message contains the given text (e.g.
+      --type admin_access, --type disconnect).
     DESC
     output_options anon: 'Replace IP addresses, MAC addresses, and identifiers with friendly placeholders'
     window_options limit: 500
@@ -582,9 +607,9 @@ module UiManage
 
     desc 'threats', 'Show IDS/IPS detections'
     long_desc <<~DESC
-      Intrusion detection and prevention events, with the signature that fired,
-      where the traffic came from and went to, and what the gateway did about
-      it.
+      Intrusion detection and prevention events: the security category of the
+      controller's system log, with the signature that fired and what the
+      gateway did about it.
 
       --severity filters to detections at or above low, medium, or high.
 
@@ -832,91 +857,59 @@ module UiManage
       report without exposing real network details. The same real value always
       maps to the same placeholder within one report run, so entries stay
       cross-referenceable across sections.
+
+      --json prints the whole report as one JSON document with a key per
+      section; a section the controller would not serve carries the reason
+      under "unavailable" instead of its data.
     DESC
-    output_options json: false,
-                   anon: 'Replace MAC addresses, IP addresses, serial number, and device ID with friendly placeholders'
+    output_options anon: 'Replace MAC addresses, IP addresses, serial number, and device ID with friendly placeholders'
     def report
       anon   = Anonymizer.new(options[:anon])
       client = resolve_client
 
-      report_header('Audit Summary')
-      show_audit_summary(client: client, anon: anon)
+      if options[:json]
+        sections = REPORT_SECTIONS.to_h do |_, key, view|
+          [key, report_section_json { send(view, client: client, anon: anon) }]
+        end
+        return Formatter.json(sections)
+      end
 
-      report_header('Identity')
-      show_identity(client: client, anon: anon)
-
-      report_header('Health')
-      show_health(client: client, anon: anon)
-
-      report_header('CPU')
-      show_cpu(client: client, anon: anon)
-
-      report_header('Memory')
-      show_memory(client: client, anon: anon)
-
-      report_header('Storage')
-      show_storage(client: client, anon: anon)
-
-      report_header('Firmware')
-      show_firmware(client: client, anon: anon)
-
-      report_header('Gateway (WAN)')
-      show_gateway(client: client, anon: anon)
-
-      report_header('Clients')
-      show_clients(client: client, anon: anon)
-
-      report_header('Wireless Experience')
-      show_wifi_experience(client: client, anon: anon)
-
-      report_header('WLANs')
-      show_wlans(client: client, anon: anon)
-
-      report_header('Neighbouring Access Points')
-      show_rogue_aps(client: client, anon: anon)
-
-      report_header('Networks / VLANs')
-      show_vlans(client: client, anon: anon)
-
-      report_header('VPN')
-      show_vpn(client: client, anon: anon)
-
-      report_header('Firewall Rules')
-      show_firewall(client: client, anon: anon)
-
-      report_header('Port Forwards')
-      show_port_forwards(client: client, anon: anon)
-
-      report_header('Routes & Dynamic DNS')
-      show_routes(client: client, anon: anon)
-
-      report_header('DHCP Networks')
-      show_dhcp(client: client, anon: anon)
-
-      report_header('DHCP Leases & Reservations')
-      show_dhcp_leases(client: client, anon: anon)
-
-      report_header('Power (PoE)')
-      show_power(client: client, anon: anon)
-
-      report_header('Ports')
-      show_ports(client: client, anon: anon)
-
-      report_header('Port Errors')
-      show_port_errors(client: client, anon: anon)
-
-      report_header('Administrators')
-      show_admins(client: client, anon: anon)
-
-      report_header('Site Settings')
-      show_settings(client: client, anon: anon)
-
-      report_header('Alarms')
-      show_alarms(client: client, anon: anon)
-
-      report_header('IDS/IPS Detections')
-      show_threats(client: client, anon: anon)
+      REPORT_SECTIONS.each do |label, _, view|
+        report_header(label)
+        send(view, client: client, anon: anon)
+      end
     end
+
+    # Each section of `report`, in order: heading, JSON key, and the view
+    # that renders it.
+    REPORT_SECTIONS = [
+      ['Audit Summary',              'audit_summary',   :show_audit_summary],
+      ['Identity',                   'identity',        :show_identity],
+      ['Health',                     'health',          :show_health],
+      ['CPU',                        'cpu',             :show_cpu],
+      ['Memory',                     'memory',          :show_memory],
+      ['Storage',                    'storage',         :show_storage],
+      ['Firmware',                   'firmware',        :show_firmware],
+      ['Gateway (WAN)',              'gateway',         :show_gateway],
+      ['Clients',                    'clients',         :show_clients],
+      ['Wireless Experience',        'wifi_experience', :show_wifi_experience],
+      ['WLANs',                      'wlans',           :show_wlans],
+      ['Neighbouring Access Points', 'rogue_aps',       :show_rogue_aps],
+      ['Networks / VLANs',           'vlans',           :show_vlans],
+      ['VPN',                        'vpn',             :show_vpn],
+      ['Firewall Rules',             'firewall',        :show_firewall],
+      ['Port Forwards',              'port_forwards',   :show_port_forwards],
+      ['Routes & Dynamic DNS',       'routes',          :show_routes],
+      ['DHCP Networks',              'dhcp',            :show_dhcp],
+      ['DHCP Leases & Reservations', 'dhcp_leases',     :show_dhcp_leases],
+      ['Power (PoE)',                'power',           :show_power],
+      ['Ports',                      'ports',           :show_ports],
+      ['Port Errors',                'port_errors',     :show_port_errors],
+      ['Administrators',             'admins',          :show_admins],
+      ['Site Settings',              'settings',        :show_settings],
+      ['Alarms',                     'alarms',          :show_alarms],
+      ['IDS/IPS Detections',         'threats',         :show_threats]
+    ].freeze
 
     # -------------------------------------------------------------------------
     # Helpers
@@ -995,14 +988,20 @@ module UiManage
       report = run_audit(Audit::Registry.select(settings: audit_settings), audit_settings,
                          client: client)
 
-      counts = report.counts
+      counts  = report.counts
+      summary = {
+        'checks_run'    => report.results.size,
+        'passed'        => report.passed.size,
+        'with_findings' => report.failed.size,
+        'not_checked'   => report.skipped.size,
+        'errored'       => report.errored.size
+      }
+
+      return Formatter.json(summary.merge('findings' => counts)) if options[:json]
+
       Formatter.kv(
-        [['Checks run',    report.results.size],
-         ['Passed',        report.passed.size],
-         ['With findings', report.failed.size],
-         ['Not checked',   report.skipped.size],
-         ['Errored',       report.errored.size],
-         ['Findings',      counts.empty? ? 'none' : counts.map { |s, n| "#{n} #{s}" }.join(', ')]]
+        summary.map { |key, value| [key.tr('_', ' ').capitalize, value] } <<
+          ['Findings', counts.empty? ? 'none' : counts.map { |s, n| "#{n} #{s}" }.join(', ')]
       )
       say ''
       say 'Run `ui-manage audit` for the findings themselves.'
@@ -1159,6 +1158,36 @@ module UiManage
       puts '=' * 70
       puts label
       puts '=' * 70
+    end
+
+    # Runs one report section under --json and returns what it produced as
+    # data. A view prints either one JSON document or one line saying why its
+    # endpoint was unavailable; capturing either keeps the whole report a
+    # single document rather than a stream of them.
+    def report_section_json
+      captured = StringIO.new
+      original = $stdout
+      $stdout  = captured
+      yield
+      JSON.parse(captured.string)
+    rescue JSON::ParserError
+      { 'unavailable' => captured.string.strip.sub(/\A[^:]*: unavailable — /, '') }
+    ensure
+      $stdout = original
+    end
+
+    # A configured device without its credentials — what `devices` shows.
+    def device_summary(dev, default:)
+      {
+        'name'                   => dev['name'],
+        'host'                   => dev['host'],
+        'site'                   => dev['site'],
+        'auth'                   => dev['encrypted_api_key'] ? 'api-key' : 'password',
+        'username'               => dev['username'],
+        'verify_ssl'             => !!dev['verify_ssl'],
+        'remote_access_expected' => dev['remote_access_expected'],
+        'default'                => default
+      }
     end
 
     def show_firewall(client: nil, anon: Anonymizer.new(false))

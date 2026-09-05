@@ -49,33 +49,111 @@ module UiManage
       end
     end
 
-    # --- query parameters -----------------------------------------------------
+    # --- system log -------------------------------------------------------------
 
-    def test_alarms_passes_window_and_archive_filter_as_query_params
-      transport = FakeTransport.new { FakeTransport.ok }
-      build_client(transport).alarms(within: 72)
+    SYSTEM_LOG = '/proxy/network/v2/api/site/default/system-log/all'.freeze
 
-      assert_equal({ 'within' => '72', 'archived' => 'false' }, transport.requests.first.query)
+    # The v2 endpoint answers {data, page_number, ...} with no meta block.
+    def system_log_page(entries)
+      FakeTransport.bare({ 'data' => entries, 'page_number' => 0, 'total_page_count' => 1 })
     end
 
-    def test_events_and_ips_events_pass_a_limit
-      transport = FakeTransport.new { FakeTransport.ok }
-      client    = build_client(transport)
-      client.events(within: 12, limit: 50)
-      client.ips_events(within: 12, limit: 50)
+    def test_events_read_one_page_of_the_system_log_over_the_window
+      transport = FakeTransport.new { system_log_page([{ 'key' => 'X' }]) }
+      before    = (Time.now.to_f * 1000).to_i
 
-      assert_equal({ 'within' => '12', '_limit' => '50' }, transport.requests[0].query)
-      assert_equal "#{SITE_PREFIX}/stat/ips/event", transport.paths[1]
-    end
+      assert_equal [{ 'key' => 'X' }], build_client(transport).events(within: 12, limit: 50)
 
-    def test_admins_posts_the_sitemgr_command
-      transport = FakeTransport.new { FakeTransport.ok([{ 'name' => 'admin' }]) }
-      build_client(transport).admins
       req = transport.requests.first
-
       assert_equal :post, req.method
-      assert_equal "#{SITE_PREFIX}/cmd/sitemgr", req.path
-      assert_equal({ 'cmd' => 'get-admins' }, req.json_body)
+      assert_equal SYSTEM_LOG, req.path
+      body = req.json_body
+      assert_equal 0,  body['pageNumber']
+      assert_equal 50, body['pageSize']
+      assert_in_delta 12 * 60 * 60 * 1000, body['timestampTo'] - body['timestampFrom'], 1000
+      assert_operator body['timestampTo'], :>=, before
+      refute body.key?('categories')
+      refute body.key?('severities')
+    end
+
+    def test_threats_are_the_security_category_and_alarms_the_severe_entries
+      transport = FakeTransport.new { system_log_page([]) }
+      client    = build_client(transport)
+      client.ips_events
+      client.alarms
+
+      assert_equal ['SECURITY'], transport.requests[0].json_body['categories']
+      assert_equal %w[WARNING HIGH VERY_HIGH], transport.requests[1].json_body['severities']
+    end
+
+    def test_archived_alarms_are_left_out_unless_asked_for
+      entries   = [{ 'key' => 'live', 'status' => 'NEW' }, { 'key' => 'old', 'status' => 'ARCHIVED' }]
+      transport = FakeTransport.new { system_log_page(entries) }
+      client    = build_client(transport)
+
+      assert_equal ['live'], client.alarms.map { |e| e['key'] }
+      assert_equal %w[live old], client.alarms(archived: true).map { |e| e['key'] }
+    end
+
+    def test_the_system_log_is_cached_on_its_arguments_not_the_time_of_the_call
+      transport = FakeTransport.new { system_log_page([]) }
+      client    = build_client(transport)
+      client.events(within: 24)
+      client.events(within: 24)
+      client.events(within: 48)
+
+      assert_equal 2, transport.requests.size
+    end
+
+    # A controller from before the system log existed still has the endpoints
+    # it replaced.
+    def test_an_older_controller_falls_back_to_the_legacy_endpoints
+      transport = FakeTransport.new do |req|
+        req.path == SYSTEM_LOG ? FakeTransport.status(404) : FakeTransport.ok([{ 'key' => 'legacy' }])
+      end
+      client = build_client(transport)
+
+      assert_equal [{ 'key' => 'legacy' }], client.alarms(within: 72)
+      assert_equal "#{SITE_PREFIX}/stat/alarm", transport.paths.last
+      assert_equal({ 'within' => '72', 'archived' => 'false' }, transport.requests.last.query)
+
+      client.events(within: 12, limit: 50)
+      assert_equal({ 'within' => '12', '_limit' => '50' }, transport.requests.last.query)
+
+      client.ips_events
+      assert_equal "#{SITE_PREFIX}/stat/ips/event", transport.paths.last
+    end
+
+    def test_when_neither_the_system_log_nor_the_legacy_endpoint_answers_both_are_named
+      transport = FakeTransport.new { FakeTransport.status(404) }
+      error     = assert_raises(Client::EndpointUnavailable) { build_client(transport).events }
+
+      assert_includes error.message, '/system-log/all'
+      assert_includes error.message, '/stat/event'
+    end
+
+    # --- administrators -------------------------------------------------------
+
+    def test_admins_are_read_controller_wide_and_narrowed_to_this_site
+      admins = [
+        { 'name' => 'root',  'is_super' => true },
+        { 'name' => 'here',  'roles' => [{ 'site_name' => 'default', 'role' => 'admin' }] },
+        { 'name' => 'there', 'roles' => [{ 'site_name' => 'branch', 'role' => 'admin' }] },
+        { 'name' => 'bare' }
+      ]
+      transport = FakeTransport.new { FakeTransport.ok(admins) }
+      req_names = build_client(transport).admins.map { |a| a['name'] }
+
+      assert_equal %w[root here bare], req_names
+      assert_equal :get, transport.requests.first.method
+      assert_equal '/proxy/network/api/stat/admin', transport.paths.first
+    end
+
+    def test_os_users_come_from_the_console_user_service_unwrapped
+      transport = FakeTransport.new { FakeTransport.bare({ 'code' => 1, 'data' => [{ 'full_name' => 'Op' }] }) }
+
+      assert_equal [{ 'full_name' => 'Op' }], build_client(transport).os_users
+      assert_equal '/proxy/users/api/v2/users', transport.paths.first
     end
 
     def test_site_stats_posts_a_bounded_time_range
@@ -206,6 +284,14 @@ module UiManage
 
       error = assert_raises(Client::ApiError) { client.devices }
       assert_includes error.message, '500'
+    end
+
+    def test_a_v2_error_reports_the_message_field
+      transport = FakeTransport.new { FakeTransport.bare({ 'errorCode' => 400, 'message' => 'bad filter' }, status: 400) }
+      client    = build_client(transport)
+
+      error = assert_raises(Client::ApiError) { client.events }
+      assert_includes error.message, 'bad filter'
     end
 
     def test_unparseable_json_names_the_endpoint

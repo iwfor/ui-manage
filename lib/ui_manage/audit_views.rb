@@ -172,16 +172,7 @@ module UiManage
         return
       end
 
-      rows = alarms.map do |a|
-        [format_event_time(a), a['subsystem'] || '-', a['key'] || '-', anon.scrub(compact_value(a['msg'], limit: 80))]
-      end
-
-      Formatter.table(
-        %w[Time Subsystem Key Message],
-        rows,
-        title: "Alarms, last #{window_hours}h (#{rows.size})",
-        sort:  options[:sort]
-      )
+      log_table(alarms, anon, title: "Alarms, last #{window_hours}h (#{alarms.size})")
     end
 
     def show_events(client: nil, anon: Anonymizer.new(false))
@@ -191,7 +182,9 @@ module UiManage
 
       if (pattern = options[:type])
         needle = pattern.downcase
-        events = events.select { |e| [e['key'], e['msg']].any? { |v| v.to_s.downcase.include?(needle) } }
+        events = events.select do |e|
+          [SystemLog.key(e), SystemLog.title(e), SystemLog.message(e)].any? { |v| v.to_s.downcase.include?(needle) }
+        end
       end
 
       return Formatter.json(anon.deep_scrub(events)) if options[:json]
@@ -201,16 +194,7 @@ module UiManage
         return
       end
 
-      rows = events.map do |e|
-        [format_event_time(e), e['subsystem'] || '-', e['key'] || '-', anon.scrub(compact_value(e['msg'], limit: 80))]
-      end
-
-      Formatter.table(
-        %w[Time Subsystem Key Message],
-        rows,
-        title: "Events, last #{window_hours}h (#{rows.size})",
-        sort:  options[:sort]
-      )
+      log_table(events, anon, title: "Events, last #{window_hours}h (#{events.size})")
     end
 
     def show_threats(client: nil, anon: Anonymizer.new(false))
@@ -220,7 +204,7 @@ module UiManage
       return if threats.nil?
 
       if (min = options[:severity])
-        threats = threats.select { |t| threat_severity_rank(t) >= severity_rank(min) }
+        threats = threats.select { |t| SystemLog.rank(t) >= severity_rank(min) }
       end
 
       return Formatter.json(anon.deep_scrub(threats)) if options[:json]
@@ -230,53 +214,43 @@ module UiManage
         return
       end
 
-      rows = threats.map do |t|
-        [
-          format_event_time(t),
-          threat_severity_label(t),
-          t['catname'] || t['inner_alert_category'] || '-',
-          anon.scrub(compact_value(t['inner_alert_signature'] || t['msg'], limit: 50)),
-          anon.ip(t['src_ip'] || t['srcip']) || '-',
-          anon.ip(t['dest_ip'] || t['dstip']) || '-',
-          t['inner_alert_action'] || t['action'] || '-'
-        ]
-      end
-
-      Formatter.table(
-        %w[Time Severity Category Signature Source Destination Action],
-        rows,
-        title: "IDS/IPS Detections, last #{window_hours}h (#{rows.size})",
-        sort:  options[:sort]
-      )
-    end
-
-    # Suricata numbers severity 1 (most severe) to 3; the controller passes it
-    # through unchanged. Inverted here so "higher rank is worse" holds.
-    SEVERITY_NAMES = { 3 => 'low', 2 => 'medium', 1 => 'high' }.freeze
-
-    def threat_severity_rank(threat)
-      raw = threat['inner_alert_severity'] || threat['severity']
-      return 0 unless raw
-
-      4 - raw.to_i.clamp(1, 3)
-    end
-
-    def threat_severity_label(threat)
-      raw = threat['inner_alert_severity'] || threat['severity']
-      SEVERITY_NAMES[raw.to_i] || raw&.to_s || '-'
+      log_table(threats, anon, title: "IDS/IPS Detections, last #{window_hours}h (#{threats.size})")
     end
 
     def severity_rank(name)
-      { 'low' => 1, 'medium' => 2, 'high' => 3 }.fetch(name.to_s.downcase) do
-        raise Thor::Error, "ERROR: unknown severity #{name.inspect} — use low, medium, or high."
+      SystemLog::RANKS.fetch(name.to_s.downcase) do
+        raise Thor::Error, "ERROR: unknown severity #{name.inspect} — use #{SystemLog::RANKS.keys.join(', ')}."
       end
     end
 
+    # Alarms, events, and detections are all system-log entries, so one
+    # table renders all three. Reading the fields lives in SystemLog, which
+    # also knows the legacy shapes an older controller still returns.
+    def log_table(entries, anon, title:)
+      rows = entries.map do |e|
+        [
+          format_event_time(e),
+          SystemLog.severity(e) || '-',
+          SystemLog.category(e) || '-',
+          anon.scrub(compact_value(SystemLog.title(e), limit: 40)),
+          anon.scrub(compact_value(SystemLog.message(e), limit: 80))
+        ]
+      end
+
+      Formatter.table(%w[Time Severity Category Title Message], rows, title: title, sort: options[:sort])
+    end
+
     def show_admins(client: nil, anon: Anonymizer.new(false))
-      admins = optional_data(:admins, client: client, label: 'Admins')
+      client ||= resolve_client
+      admins   = optional_data(:admins, client: client, label: 'Admins')
       return if admins.nil?
 
-      return Formatter.json(anon.deep_scrub(admins)) if options[:json]
+      if options[:json]
+        # Names and addresses have no shape to recognise, so they are
+        # registered first and deep_scrub replaces them wherever they appear.
+        admins.each { |a| anon.person(AdminAccount.name(a)) && anon.email(a['email']) }
+        return Formatter.json(anon.deep_scrub(admins))
+      end
 
       if admins.empty?
         say 'No administrators reported.'
@@ -287,8 +261,8 @@ module UiManage
         [
           anon.person(AdminAccount.name(a)),
           anon.email(a['email']) || '-',
-          a['role'] || (a['is_super'] ? 'super' : '-'),
-          a['is_super'] ? 'YES' : 'no',
+          AdminAccount.role(a, site: client.site) || '-',
+          AdminAccount.super?(a) ? 'YES' : 'no',
           two_factor_label(a),
           a['last_site_name'] || '-'
         ]
@@ -677,16 +651,9 @@ module UiManage
         .each_with_object({}) { |n, h| h[n['_id']] = n['vlan'] ? "#{n['name']} (VLAN #{n['vlan']})" : n['name'] }
     end
 
-    # Alarms and events carry either an epoch `time` in milliseconds or a
-    # preformatted `datetime`, depending on endpoint and version.
     def format_event_time(entry)
-      if (ms = entry['time'])
-        Time.at(ms.to_i / 1000).strftime('%Y-%m-%d %H:%M')
-      elsif (dt = entry['datetime'])
-        dt.to_s.sub('T', ' ').sub(/Z\z/, '')
-      else
-        '-'
-      end
+      time = SystemLog.time(entry)
+      time ? time.strftime('%Y-%m-%d %H:%M') : '-'
     end
   end
 end

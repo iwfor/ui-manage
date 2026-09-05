@@ -56,6 +56,41 @@ module UiManage
       assert_includes out, 'audit'
     end
 
+    # --- json -------------------------------------------------------------------
+
+    # One flag, spelled one way, on every command that prints information.
+    # The exempt ones change state or print a script, where JSON means nothing.
+    def test_every_information_command_takes_the_same_json_flag
+      exempt = %w[help login use_device remove_device completions]
+
+      CLI.commands.each do |name, command|
+        next if exempt.include?(name)
+
+        json = command.options[:json] || command.options['json']
+        assert json, "#{name} has no --json option"
+        assert_equal ['-j'],   json.aliases, "#{name} spells the --json alias differently"
+        assert_equal :boolean, json.type,    "#{name}'s --json is not a switch"
+      end
+    end
+
+    def test_devices_json_lists_devices_without_their_credentials
+      Config.new.add_device(name: 'gw', host: '10.0.0.1', encrypted_api_key: 'cipher')
+      out, = capture_io { cli(json: true).devices }
+      doc  = JSON.parse(out)
+
+      assert_equal 'gw',      doc.first['name']
+      assert_equal 'api-key', doc.first['auth']
+      assert doc.first['default']
+      refute_includes out, 'cipher'
+    end
+
+    def test_policy_json_reports_the_stored_answer
+      Config.new.add_device(name: 'gw', host: '10.0.0.1', encrypted_api_key: 'c', remote_access_expected: false)
+      out, = capture_io { cli(json: true, device: 'gw').policy }
+
+      assert_equal({ 'device' => 'gw', 'remote_access_expected' => false }, JSON.parse(out))
+    end
+
     # --- api key validation ---------------------------------------------------
 
     def test_an_api_key_with_control_characters_is_rejected

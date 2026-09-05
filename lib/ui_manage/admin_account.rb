@@ -1,6 +1,7 @@
 module UiManage
   # Reading administrator accounts, whose shape varies more than most across
-  # Network application versions.
+  # Network application versions. The current source, /api/stat/admin, lists
+  # every administrator on the controller with a `roles` entry per site.
   module AdminAccount
     # Which field carries two-factor state depends on the version, and some
     # versions report none at all.
@@ -26,6 +27,24 @@ module UiManage
 
     def super?(admin)
       admin['is_super'] || admin['role'].to_s.casecmp?('super')
+    end
+
+    # Whether the account can administer +site+. Super administrators can
+    # administer every site; a record that carries no site roles at all is
+    # taken as listed for this site, since the controller gave nothing to
+    # say otherwise.
+    def member_of?(admin, site)
+      return true if super?(admin) || !admin.key?('roles')
+
+      Array(admin['roles']).any? { |r| r['site_name'] == site }
+    end
+
+    # The account's role on +site+: an explicit `role`, else the site's entry
+    # in `roles`, else 'super' for a super administrator with no site entry.
+    def role(admin, site: nil)
+      admin['role'] ||
+        Array(admin['roles']).find { |r| r['site_name'] == site }&.dig('role') ||
+        (super?(admin) ? 'super' : nil)
     end
 
     def name(admin) = admin['name'] || admin['email'] || admin['_id']

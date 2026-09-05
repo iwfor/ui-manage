@@ -320,21 +320,21 @@ module UiManage
 
       def test_an_admin_without_two_factor_is_reported
         report = audit_report(:admin_two_factor,
-                              { 'sitemgr' => [{ 'name' => 'alice', 'x_has_totp' => false }] })
+                              { 'stat/admin' => [{ 'name' => 'alice', 'x_has_totp' => false }] })
 
         assert_equal :high, report.worst_severity
       end
 
       def test_a_super_admin_without_two_factor_is_critical
         report = audit_report(:admin_two_factor,
-                              { 'sitemgr' => [{ 'name' => 'root', 'is_super' => true, 'x_has_totp' => false }] })
+                              { 'stat/admin' => [{ 'name' => 'root', 'is_super' => true, 'x_has_totp' => false }] })
 
         assert_equal :critical, report.worst_severity
       end
 
       def test_admins_with_two_factor_pass
         report = audit_report(:admin_two_factor,
-                              { 'sitemgr' => [{ 'name' => 'alice', 'x_has_totp' => true }] })
+                              { 'stat/admin' => [{ 'name' => 'alice', 'x_has_totp' => true }] })
 
         assert report.clean?
       end
@@ -342,7 +342,7 @@ module UiManage
       # Judging a controller that reports nothing as "nobody has 2FA" would be
       # a fabricated finding.
       def test_a_controller_reporting_no_two_factor_state_skips_the_check
-        report = audit_report(:admin_two_factor, { 'sitemgr' => [{ 'name' => 'alice', 'role' => 'admin' }] })
+        report = audit_report(:admin_two_factor, { 'stat/admin' => [{ 'name' => 'alice', 'role' => 'admin' }] })
 
         assert_equal 1, report.skipped.size
         assert_empty report.passed
@@ -352,7 +352,7 @@ module UiManage
       # than assumed either way.
       def test_a_partially_reported_admin_list_reports_the_gap_at_info
         report = audit_report(:admin_two_factor,
-                              { 'sitemgr' => [{ 'name' => 'alice', 'x_has_totp' => true },
+                              { 'stat/admin' => [{ 'name' => 'alice', 'x_has_totp' => true },
                                               { 'name' => 'bob' }] })
 
         assert_equal 1, report.findings.size
@@ -362,7 +362,7 @@ module UiManage
 
       def test_too_many_super_admins_is_reported
         admins = 4.times.map { |i| { 'name' => "admin#{i}", 'is_super' => true } }
-        report = audit_report(:admin_super_count, { 'sitemgr' => admins })
+        report = audit_report(:admin_super_count, { 'stat/admin' => admins })
 
         assert_equal :medium, report.worst_severity
         assert_equal 4, report.findings.first.evidence['count']
@@ -372,8 +372,8 @@ module UiManage
         admins   = 3.times.map { |i| { 'name' => "admin#{i}", 'is_super' => true } }
         settings = Settings.new(path: nil, thresholds: { 'max_super_admins' => 5 })
 
-        refute audit_report(:admin_super_count, { 'sitemgr' => admins }).clean?
-        assert audit_report(:admin_super_count, { 'sitemgr' => admins }, settings: settings).clean?
+        refute audit_report(:admin_super_count, { 'stat/admin' => admins }).clean?
+        assert audit_report(:admin_super_count, { 'stat/admin' => admins }, settings: settings).clean?
       end
 
       # --- threat detections, devices, TLS -----------------------------------
@@ -384,7 +384,7 @@ module UiManage
           { 'inner_alert_signature' => 'ET SCAN', 'inner_alert_severity' => 1, 'src_ip' => '203.0.113.2' },
           { 'inner_alert_signature' => 'ET INFO', 'inner_alert_severity' => 3, 'src_ip' => '203.0.113.3' }
         ]
-        report = audit_report(:ips_recent_detections, { 'ips/event' => events })
+        report = audit_report(:ips_recent_detections, { 'system-log' => events })
 
         assert_equal 2, report.findings.size
         scan = report.findings.find { |f| f.subject == 'ET SCAN' }
@@ -392,8 +392,21 @@ module UiManage
         assert_equal :high, scan.severity
       end
 
+      def test_detections_from_the_system_log_are_grouped_by_title
+        events = [
+          { 'title_raw' => 'ET SCAN', 'severity' => 'HIGH',   'message_raw' => 'x' },
+          { 'title_raw' => 'ET SCAN', 'severity' => 'MEDIUM', 'message_raw' => 'x' },
+          { 'title_raw' => 'ET INFO', 'severity' => 'LOW',    'message_raw' => 'y' }
+        ]
+        report = audit_report(:ips_recent_detections, { 'system-log' => events })
+
+        assert_equal 2, report.findings.size
+        assert_equal :high,   report.findings.find { |f| f.subject == 'ET SCAN' }.severity
+        assert_equal :medium, report.findings.find { |f| f.subject == 'ET INFO' }.severity
+      end
+
       def test_no_detections_passes
-        assert audit_report(:ips_recent_detections, { 'ips/event' => [] }).clean?
+        assert audit_report(:ips_recent_detections, { 'system-log' => [] }).clean?
       end
 
       def test_an_unadopted_device_is_reported

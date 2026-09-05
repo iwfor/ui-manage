@@ -25,13 +25,24 @@ module UiManage
     # A credential that cannot read the optional endpoints — an API key, in
     # practice — must still get a complete report.
     def test_a_report_survives_every_optional_endpoint_being_refused
-      routes = %w[wlanconf get/setting stat/health rogueap sitemgr
-                  stat/alarm ips/event rest/routing dynamicdns].to_h { |p| [p, 403] }
+      routes = %w[wlanconf get/setting stat/health rogueap stat/admin
+                  system-log stat/alarm ips/event rest/routing dynamicdns].to_h { |p| [p, 403] }
       out    = report_output(routes)
 
       assert_includes out, 'unavailable'
       assert_includes out, 'IDS/IPS Detections'
       refute_includes out, 'No administrators reported'
+    end
+
+    def test_a_json_report_is_one_document_with_a_key_per_section
+      routes = { 'stat/device' => [{ 'name' => 'gw', 'type' => 'udm' }], 'wlanconf' => 403 }
+      out    = render(:report, routes, json: true)
+      doc    = JSON.parse(out)
+
+      assert_equal CLI::REPORT_SECTIONS.map { |_, key, _| key }, doc.keys
+      assert_equal 'gw', doc['firmware'].first['name']
+      assert_includes doc['wlans']['unavailable'], 'not permitted'
+      assert_kind_of Integer, doc['audit_summary']['checks_run']
     end
 
     def test_windowed_sections_use_the_documented_default_outside_their_command

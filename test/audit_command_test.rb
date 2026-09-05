@@ -7,7 +7,7 @@ module UiManage
       'wlanconf'    => [{ 'name' => 'Guest', 'enabled' => true, 'security' => 'open' }],
       'stat/device' => [{ 'name' => 'AP', 'state' => 0, 'model' => 'U6' }],
       'get/setting' => 403,
-      'sitemgr'     => 403
+      'stat/admin'     => 403
     }.freeze
 
     # Runs `audit` and returns [stdout, exit status]. The command exits, so the

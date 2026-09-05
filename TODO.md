@@ -358,13 +358,28 @@ Dropped deliberately:
 
 ## Still open
 
-Nothing blocking. Worth doing when there is a real controller to test
-against:
+Nothing blocking.
 
-- [ ] Verify `/cmd/sitemgr`, `/rest/dpiapp`, `/stat/ips/event`, the 2FA field
-      name, and the `super_cloudaccess` settings key against the real
-      controller. All degrade safely today, but several checks will be
-      skipping rather than running until confirmed.
+- [x] Verified against the UDM Pro (UniFi OS 5.1, Network 10.6), 2026-09-05:
+      `/cmd/sitemgr get-admins` answers 400 `api.err.Invalid`, and
+      `/stat/alarm`, `/stat/event`, and `/stat/ips/event` answer 404 — all
+      four are gone. Administrators now come from `GET /api/stat/admin`
+      (controller-wide, narrowed to the site); alarms, events, and threats
+      from `POST /v2/api/site/{site}/system-log/all`, which takes
+      `categories` and `severities` filters and returns templated messages.
+      The legacy endpoints remain as a fallback for older controllers.
+      `/api/users` is also gone; console users are at
+      `/proxy/users/api/v2/users`. Neither admin endpoint carries a 2FA field,
+      so `admin_two_factor` skips on this controller.
+- [ ] Verify `/rest/dpiapp` and the `super_cloudaccess` settings key against
+      the real controller.
+- [ ] Confirm the shape of a system-log SECURITY entry once the controller
+      has logged one: `ips_recent_detections` and `threats` read source and
+      destination addresses from the legacy field names only.
+- [ ] `--anon` in `--json` mode replaces only values with a recognisable
+      shape (IPs, MACs) plus names a view registered first. `admins` now
+      registers its names; the other views' JSON output still passes SSIDs
+      and device names through.
 - [ ] Inter-VLAN restriction between IoT/guest and trusted networks — the
       most valuable check still missing (Phase 4 deferral).
 - [ ] WAN-facing management exposure, via `WAN_LOCAL` rule analysis.
